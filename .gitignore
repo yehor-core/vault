@@ -1,0 +1,9 @@
+# Documentation and agent settings
+# Leading "/" anchors to the repo root; git has no "./" form, so "./docs" matched nothing.
+/docs/
+
+node_modules/
+
+# Test artifacts (Playwright results, Vitest failure screenshots)
+test-results/
+.vitest/
