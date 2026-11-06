@@ -51,9 +51,9 @@ Trusted: the browser, its WebCrypto and IndexedDB implementations, the OS, and o
 
 | Adversary or event | Mode | Guarantee | Not guaranteed | Enforced by |
 |---|---|---|---|---|
-| Copy of the browser profile or disk | Unprotected | Private keys are stored only as AES-256-GCM ciphertext. The only stored secret is the wrapping private key, a non-extractable CryptoKey held by the browser. | **Not protected against a profile copy.** The browser keeps the root key's bytes in the profile, so the copy, opened in the same browser or parsed, recovers every key. | `storage › no private key bytes are stored: only ciphertext and a non-extractable root key` |
+| Copy of the browser profile or disk | Unprotected | Private keys are stored only as AES-256-GCM ciphertext. The only stored secret is the wrapping private key, a non-extractable CryptoKey held by the browser, and without it nothing decrypts. | **Not protected against a profile copy.** The browser keeps the root key's bytes in the profile, so the copy, opened in the same browser or parsed, recovers every key. | `storage › no private key bytes are stored: only ciphertext and a non-extractable root key`, `› decrypting needs the root key…` |
 | | Protected | Not built yet | | |
-| Records added or replaced by anyone who can write to storage | Both | `list()`, with no secret, rejects an edited id, type, public key, version or scope. `sign()` rejects an edit to any other field: a changed byte, swapped ciphertexts, an off-curve ephemeral key. It also rejects a key the attacker sealed to the public wrapping key: that ciphertext decrypts cleanly, so the signature check before returning catches it. All of these fail with `corrupted`. | A complete new key record needs no secret, so an added key can't be told from a real one. Deleting records isn't detected. Edits to createdAt and to the ciphertext surface only when the key is used. A replaced header is not detected at list time (§11). | `storage › editing <field> of a key record fails closed` (8 cases plus a coverage check), `› ciphertexts swapped…`, `› a key an attacker sealed…`, `› an off-curve ephemeral public key…`, `› a key record moved to another scope…` |
+| Records added or replaced by anyone who can write to storage | Both | `list()`, with no secret, rejects a field of the wrong type or length, and an edited id, type, public key, version or scope. `sign()` rejects an edit to any other field: a changed byte, swapped ciphertexts, an off-curve ephemeral key. It also rejects a key the attacker sealed to the public wrapping key: that ciphertext decrypts cleanly, so the signature check before returning catches it. Key records without a header are never treated as a new vault. All of these fail with `corrupted`. | A complete new key record needs no secret, so an added key can't be told from a real one. Deleting records isn't detected. Edits to createdAt and to the ciphertext surface only when the key is used. A replaced header is not detected at list time (§11). **In WebKit, signing with a planted key whose public key is degenerate (e.g. the identity point) crashes the tab instead of failing with `corrupted`: not protected** (§8). | `storage › editing <field> of a key record fails closed` (8 cases plus a coverage check), `› changing a field type without changing its value…` (6 cases), `› a planted key whose public key has the wrong length…`, `› a planted key with a degenerate public key…` (Chromium, Firefox), `› ciphertexts swapped…`, `› a key an attacker sealed…`, `› an off-curve ephemeral public key…`, `› a key record moved to another scope…`, `vault › key records without a vault header are corrupted everywhere…` |
 | Older storage snapshot restored | Both | — | **Not detected.** A consistent older copy is a valid state: keys deleted since then reappear, keys added since then vanish. IndexedDB is the only store, so there is nowhere to anchor a counter. | not protected |
 | Malicious script in the same origin while unlocked | Unprotected | The API never returns private key bytes. Vault keeps no secret in memory between calls. | **Not protected.** The script can sign with every key, and can open the database and use the root key to unwrap every key as extractable, which exfiltrates them. | `src/vault.ts` (no export method) |
 | Lost, deleted or replaced passkey (protection passkey) | Protected | Not built yet | | |
@@ -122,19 +122,21 @@ One IndexedDB database (default name `vault`); schema version 1.
 | `meta` / header | `'header'` | `v`, `wrappingPublicKey` (SPKI), `protection: { kind: 'none', privateKey: CryptoKey }` | The private key is a non-extractable CryptoKey held by the browser | Not integrity-protected (§11) |
 | `keys` / key | `[scope, id]` | `v`, `scope`, `id`, `type`, `publicKey`, `createdAt`, `sealed: { ephemeralPublicKey (SPKI), iv, ciphertext }` | `ciphertext` only | `id` = SHA-256(scope, type, public key), checked by `list()`. AAD = every field except `sealed`. HKDF binds the ephemeral key and the wrapping public key. |
 
-Scopes are the first component of the key, so one scope is one key range. Only the scope `default` is used so far. Every hashed or authenticated value is length-prefixed (`src/bytes.ts` `encode`), so field boundaries can't shift.
+Scopes are the first component of the key, so one scope is one key range. Only the scope `default` is used so far. Every hashed or authenticated value goes through one canonical encoding (`src/bytes.ts` `encode`): each part is a type tag, a 4-byte length and its bytes. Strings are UTF-8, bytes only `Uint8Array`, integers only safe non-negative values as 8 bytes big-endian. So field boundaries can't shift, and `123` and `"123"` never encode alike: `storage › each value keeps its type…`.
 
 ### 4.2 Validation and fail-closed behaviour
 
 | Check | When | Failure |
 |---|---|---|
-| `v` is exactly 1 (header and key records) | every read | `corrupted`: `storage › a header with an unknown format version…`, `› editing v…` |
-| Header is present and its protection kind is known (`null`, which WebKit returns for an unreadable value, counts as tampered) | `generate`, `sign` | `corrupted` |
-| A key record with no header is never treated as a new vault | `sign` | `corrupted`: `vault › a key record without a vault header is corrupted, not unprotected` |
-| Type is a registered key type; id matches the hash | `list`, `sign`, without any secret | `corrupted` |
+| `v` is the number 1, never coerced (header and key records) | every read | `corrupted`: `storage › a header with format version 2 / '1' / true / undefined…`, `› editing v…`, `› changing a field type…: v as the string '1'` |
+| Header fields have their exact types: wrapping public key bytes, a known protection kind, a CryptoKey root. A header key whose value is `undefined` (or `null`, which WebKit returns for an unreadable value) is malformed, not absent. | `list`, `generate`, `sign` | `corrupted`: `vault › a header stored as undefined…` |
+| Key records without a header mean a deleted header, never a new vault: only `wipe()` works | `list`, `generate`, `sign` | `corrupted`: `vault › key records without a vault header are corrupted everywhere…` |
+| Key record fields have their exact types: scope and id strings, a registered type, the public key a `Uint8Array` of the type's length, createdAt a safe integer, sealed fields `Uint8Array`, a 12-byte IV | `list`, `sign`, without any secret | `corrupted`: `storage › changing a field type…` (6 cases), `› a planted key whose public key has the wrong length…` |
+| Id matches the hash of scope, type and public key | `list`, `sign`, without any secret | `corrupted`: `storage › editing id / type / publicKey…` |
 | Ephemeral key imports as SPKI → AES-GCM decrypt with AAD → sign → verify against the stored public key | `sign` | `corrupted` |
+| A version-1 database has Vault's stores | `open` | `corrupted`: `vault › a database without Vault stores…` |
 
-Vault never repairs: no code path writes back a record it failed to read. A failed check rejects the whole call, so `list()` fails if any key in the scope is bad. Not yet validated: the type of every field. A record with a missing or mistyped field can surface as an unclassified `TypeError` (§11).
+Vault never repairs: no code path writes back a record it failed to read. A failed check rejects the whole call, so `list()` fails if any key in the scope is bad.
 
 ### 4.3 Versioning and migration
 
@@ -146,7 +148,7 @@ Vault never repairs: no code path writes back a record it failed to read. A fail
 
 ### 4.4 Eviction and persistent storage
 
-An empty database (no header, no keys) behaves as a new vault: `list()` returns `[]` and the first `generate()` creates the vault. Vault can't tell "never used", "wiped" and "evicted" apart. Browsers evict an origin's storage as a whole, and IndexedDB is its only store.
+An empty database (no header, no keys) behaves as a new vault: `list()` returns `[]` and the first `generate()` creates the vault. Key records without a header are not empty but `corrupted` (§4.2). Vault can't tell "never used", "wiped" and "evicted" apart. Browsers evict an origin's storage as a whole, and IndexedDB is its only store.
 
 <!-- Position on navigator.storage.persist(): decided with storage integrity. -->
 
@@ -159,13 +161,16 @@ stateDiagram-v2
   Unprotected --> Unprotected: generate, delete
   Unprotected --> Empty: wipe
   Empty --> Empty: list, wipe
+  Unprotected --> Corrupted: header deleted or tampered (by a storage writer)
+  Corrupted --> Empty: wipe
 ```
 
 "Wiped" is the state Empty, and there is no separate state. Protected, locked and unlocked arrive with passkey protection. `close()` ends one instance (every later call throws `InvalidStateError`); the stored state doesn't change.
 
 | From | Operation | To | Prompts | Atomic how | On failure |
 |---|---|---|---|---|---|
-| Empty | `generate` | Unprotected | none | Header and key added in one transaction; the header is added only if still absent | Nothing written: `vault › the first generate writes header and key atomically…` |
+| Empty | `generate` | Unprotected | none | Header and key added in one transaction; the header is added only if still absent and no key record exists | Nothing written: `vault › the first generate writes header and key atomically…` |
+| Corrupted (key records without a header) | `list`, `generate`, `sign` | Corrupted | none | — | `corrupted`; only `wipe` leads out |
 | Unprotected | `generate` | Unprotected | none | One transaction re-checks the header and adds the key | Nothing written |
 | Unprotected | `delete` | Unprotected | none | One request | Nothing deleted |
 | Any | `wipe` | Empty | none | Both stores cleared in one transaction | Nothing cleared |
@@ -188,13 +193,14 @@ stateDiagram-v2
 
 ## 6. Concurrency and crash safety
 
-Firefox and WebKit end an IndexedDB transaction at the first await that isn't an IndexedDB request, and `crypto.subtle` counts (Chromium happens not to). So all crypto runs **before** a transaction, and the transaction only checks and writes (`src/db.ts` `transact`).
+A transaction ends once control returns to the event loop with no request pending. Awaiting a request's promise continues in a microtask and keeps it alive. But in Firefox and WebKit, an await that settles in a later task, `crypto.subtle` included, ends it (Chromium happens to keep it). So all crypto runs **before** a transaction, and the transaction only checks and writes (`src/db.ts` `transact`).
 
 | Requirement | Mechanism | Verified by |
 |---|---|---|
 | Multi-record changes are atomic | One transaction per change; a throwing body aborts it | `vault › the first generate writes header and key atomically…` |
-| No lost updates | Readwrite transactions on overlapping stores run one at a time across tabs. `generate` re-reads the header inside its write transaction and adds only if the header is the one it sealed to; otherwise it redoes the whole operation, up to 3 times, then fails with `unavailable`. | `src/vault.ts` `generate`; multi-tab tests not written yet |
+| No lost updates | Readwrite transactions on overlapping stores run one at a time across tabs. `generate` re-reads the header inside its write transaction and adds only if the header is the one it sealed to; otherwise it redoes the whole operation. It tries 3 times in total, then fails with `unavailable`. | `src/vault.ts` `generate`; multi-tab tests not written yet |
 | Concurrent first-time setup converges | The header is added only if absent, inside the write transaction; the loser redoes against the winner's header | `src/vault.ts` `generate`; multi-tab tests not written yet |
+| A call in flight across `close()` | The connection is taken right before each transaction, after re-checking `close()` | `vault › a call in flight when the vault is closed fails with InvalidStateError…` |
 | A stale context can't undo a wipe | As above: a write sealed to a wiped header fails its check | `src/vault.ts` `generate`; multi-tab tests not written yet |
 | Other contexts learn about changes | Not built yet | |
 
@@ -214,7 +220,7 @@ class Vault {
 }
 type KeyTypeName = 'ed25519';
 interface KeyInfo { id: string; type: KeyTypeName; publicKey: Uint8Array; createdAt: Date }
-type Signature = { type: 'ed25519'; bytes: Uint8Array };   // a union discriminated by type
+type Signature = { type: 'ed25519'; bytes: Uint8Array };   // one member per key type, derived from the registry
 class VaultError extends Error { code: VaultErrorCode; retryable: boolean }
 ```
 
@@ -252,15 +258,15 @@ All failures are `VaultError` with a `code`; `retryable` is true only for `unava
 
 | Situation | Error type | Retryable | Caller should |
 |---|---|---|---|
-| Infrastructure fault (transient) | `unavailable` | yes | Retry; check quota or storage access if it persists. `vault › an IndexedDB failure is reported as retryable unavailable…` |
-| Corrupted or tampered storage | `corrupted` | no | Stop using the vault and tell the user; Vault doesn't repair. §4.2 tests |
+| Infrastructure fault (transient): IndexedDB, or a key generation WebCrypto rejected | `unavailable` | yes | Retry; check quota or storage access if it persists. `vault › an IndexedDB failure is reported as retryable unavailable…`, `› a transient key generation failure is retried; a persistent one is retryable unavailable` |
+| Corrupted or tampered storage | `corrupted` | no | Stop using the vault and tell the user; Vault doesn't repair. `wipe()` is the way back (for a database that isn't Vault's, delete it). §4.2 tests |
 | Storage written by a newer format | `incompatible` | no | Reload with the newer build. `storage › a database written by a newer format…` |
 | Prompt declined or cancelled | Not built yet | | |
 | Vault locked | Not built yet | | |
 | Key not found | `not-found` | no | Refresh the key list. `vault › signing with an unknown key id fails with not-found` |
 | Passkey protection unsupported | Not built yet | | |
 
-Use after `close()` is a programming error and throws a `DOMException` `InvalidStateError`, as IndexedDB does: `vault › a closed vault rejects every call`.
+Programming errors are not `VaultError`. Use after `close()`, including a call still in flight when it closed, throws a `DOMException` `InvalidStateError`, as IndexedDB does: `vault › a closed vault rejects every call`, `› a call in flight when the vault is closed…`. An unknown key type name passed from JavaScript throws `TypeError`: `vault › an unknown key type is a programming error…`.
 
 ### 7.4 Prompts and user gestures
 
@@ -268,10 +274,11 @@ Use after `close()` is a programming error and throws a `DOMException` `InvalidS
 
 ### 7.5 Adding a key type
 
-A key type implements `KeyType` (`src/key-types.ts`) and is added to the `keyTypes` registry. The core calls only these methods and never branches on a type name.
+A key type implements `KeyType` (`src/key-types.ts`) and is added to the `keyTypes` registry. `KeyTypeName` and `Signature` gain its member automatically. The core calls only these methods and never branches on a type name. One caveat: older builds reject a record of a type they don't know (§11).
 
 ```ts
 interface KeyType {
+  publicKeyLength: number;   // a stored public key of any other length is corrupted
   generate(): Promise<{ publicKey: Uint8Array; seal(cipher: Cipher): Promise<ArrayBuffer> }>;
   sign(sealed: Uint8Array, cipher: Cipher, data: Uint8Array): Promise<Uint8Array>;
   verify(publicKey: Uint8Array, signature: Uint8Array, data: Uint8Array): Promise<boolean>;
@@ -289,7 +296,12 @@ Storage and crypto facts this design depends on, measured in the engines Playwri
 | Ed25519, ECDH P-256, HKDF, AES-GCM `wrapKey`/`unwrapKey` | ✓ | ✓ | ✓ | All crypto is WebCrypto |
 | X25519 CryptoKey survives IndexedDB | ✓ | ✓ | ✗ (reads back `null`) | P-256 for the wrapping key |
 | Off-curve P-256 point rejected by `raw` / `jwk` import | ✓ | ✓ | ✗ | Points are imported only as SPKI |
-| Transaction survives `await crypto.subtle` | yes | no | no | Crypto never runs inside a transaction |
+| Transaction survives an await that settles in a later task (`crypto.subtle`) | yes | no | no | Crypto never runs inside a transaction |
+| Transaction survives a microtask await (a request's promise) | yes | yes | yes | Transaction bodies await request promises |
+| `generateKey('Ed25519')` always succeeds | ✓ | ✓ | ✗ (about 0.7% `OperationError`; no generated key has a leading zero byte) | Retried up to 5 times: `vault › a transient key generation failure is retried…`; 1000 generates in a row pass in every engine |
+| Ed25519 `verify` with a degenerate public key (identity point, small y) returns `false` | ✓ | ✓ | ✗ (the page's process crashes) | Not protected; only a planted key can trigger it (§2.3) |
+
+These WebKit facts come from Playwright's WebKit on Linux. Safari on macOS was not checked.
 
 <!-- Passkey features: where PRF at create vs get, UV and discoverable credentials degrade; what Vault detects up front and what only on failure. -->
 
@@ -309,13 +321,19 @@ Storage and crypto facts this design depends on, measured in the engines Playwri
 | Versioning | Schema version = format version, and `v` in every record | Version in the header only | Re-encrypting migrations can't run in the upgrade callback; per-record versions let them run lazily | One field per record |
 | Concurrency | Crypto first, then one transaction that re-checks the header | Web Locks around read → crypto → write | IndexedDB alone gives atomicity and serialization; no lock is ever held across a passkey prompt | Crypto is wasted on a conflict |
 | `sign` result | Union discriminated by `type` | Bare `Uint8Array`; key handles with methods | Passkey assertions need more than signature bytes; handles go stale across tabs | Callers narrow on `type` |
-| Errors | One `VaultError` with `code` | A subclass per category | Exhaustive `switch`; codes survive `postMessage`; `instanceof` fails across realms | No `instanceof` per category |
+| Errors | One `VaultError` with `code` | A subclass per category | Exhaustive `switch`; one export; `instanceof` fails across realms. A string code is easy to send in a message (structured clone keeps neither `code` nor a subclass, so an embedding layer sends `{ code, message }`). | No `instanceof` per category |
 | Lifecycle | The vault is created by its first write; wipe empties it for every instance | Eager creation in `open()`; wipe closes every instance | Reads never write; one rule for wipe | "Wiped" and "never used" are the same state |
+| Keys without a header | `corrupted` in `list`, `generate`, `sign`; only `wipe` recovers | Keep listing them; create a fresh header next to them | A fresh header would turn a deleted protected header into an unprotected vault | A writer who deletes only the header makes the vault unusable until `wipe` |
+| Field types | Checked on every read, plus a typed canonical encoding | Leave type checks for later; numbers as `String()` | A type change with the same encoding (`"123"` for `123`, an `Array` for bytes) passed both the id and the AAD | — |
+| WebKit's failing Ed25519 key generation | Retry up to 5 times, then `unavailable` | Classify at once and let every caller retry | Generation has no side effects; 5 failures in a row ≈ 10⁻¹¹ | An engine workaround in the key type |
+| WebKit's crashing Ed25519 verify | Documented as not protected | Verify with `@noble/curves`; compare a public key derived via JWK export | A storage writer can already destroy the vault; no new dependency; JWK export would put private key bytes in JS memory on every sign | A tab crash on a planted key in WebKit |
 
 ## 11. Known limitations
 
 - **Unprotected mode doesn't protect against a profile copy or same-origin code** (§2.3). That is what passkey protection is for.
-- **Records are not yet fully validated.** A record with a missing or mistyped field may fail with an unclassified `TypeError` instead of `corrupted`.
+- **WebKit crashes the tab when signing with a planted key whose public key is degenerate** (§8). Legitimate keys never trigger it, and only someone who can write storage can plant one.
+- **A writer who deletes only the header makes the vault `corrupted` until `wipe()`**, by design (§4.2).
+- **WebKit's Ed25519 key generation fails about 0.7% of the time**; Vault retries it. Not checked in Safari on macOS.
 - **The header is not integrity-protected.** A writer who replaces it with their own wrapping key pair makes existing keys fail at `sign()` (`corrupted`), and gets new keys sealed to their key. `list()` doesn't notice.
 - **One bad record fails all of `list()`** for its scope (fail closed).
 - **An unknown key type is `corrupted`.** A future key type must bump the format version, so older builds see `incompatible` instead.

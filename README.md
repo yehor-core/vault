@@ -40,31 +40,45 @@ const signature = await vault.sign(key.id, new TextEncoder().encode('hello'));
 | Firefox | 157 | ✓ | ✓ | not built yet |
 | WebKit | 27.2 | ✓ | ✓ | not built yet |
 
-Needs WebCrypto Ed25519, ECDH P-256, HKDF and AES-GCM, plus IndexedDB, in a secure context. WebKit drives two design choices; see DESIGN.md §8.
+Needs WebCrypto Ed25519, ECDH P-256, HKDF and AES-GCM, plus IndexedDB, in a secure context. WebKit (Playwright, Linux) has four quirks that shape the design; see DESIGN.md §8:
+- It loses stored X25519 keys.
+- Its point import accepts off-curve points.
+- Its Ed25519 key generation fails about 0.7% of the time (Vault retries it).
+- Its Ed25519 verify crashes the tab on degenerate public keys. That one is not protected: only a planted key can trigger it.
 
 ## Property → test
 
-Unit tests: `test/unit/vault.test.ts` (vault ›) and `test/unit/storage.test.ts` (storage ›). Every unit test runs in all three engines. Each row was break-checked: the guarding code was broken once and the test went red in every listed engine. Where two guards protect one property, both were broken together. The exceptions are the two platform rows, "Keys persist" and "Opening and listing write nothing", which are functional checks.
+Unit tests: `test/unit/vault.test.ts` (vault ›) and `test/unit/storage.test.ts` (storage ›). Every unit test runs in all three engines, except one test skipped in WebKit, as noted in its row. Each row was break-checked: the guarding code was broken once and the test went red in every listed engine. Where two guards protect one property, both were broken together. Exception: breaking the SPKI guard turns its test red only in WebKit, the only engine whose `raw` import accepts off-curve points. Not break-checked: the two platform rows, "Keys persist" and "Opening and listing write nothing", which are functional checks.
 
 | Property | Test | Engines |
 |---|---|---|
 | Tests run in real browser engines, not an emulation | `test/unit/platform.test.ts` › runs in the real browser engine it is configured for | Chromium, Firefox, WebKit |
 | Playwright suite serves the demo from a secure context (needed by WebCrypto and WebAuthn) | `test/e2e/demo.spec.ts` › demo page runs its TypeScript module in a secure context | Chromium, Firefox, WebKit |
 | No private key bytes are stored; the only stored secret is a non-extractable root key | storage › encryption at rest › no private key bytes are stored: only ciphertext and a non-extractable root key | Chromium, Firefox, WebKit |
+| Nothing decrypts without the root key (the sealing really uses ECDH) | storage › encryption at rest › decrypting needs the root key: with another private key in its place, sign fails closed | Chromium, Firefox, WebKit |
 | A signature verifies under the public key alone, without Vault | vault › keys › a signature verifies under the public key with WebCrypto alone, without Vault; `test/e2e/demo.spec.ts` › demo creates, lists, signs, deletes and wipes keys… (verified again in Node) | Chromium, Firefox, WebKit |
 | An edited id, type, public key or version is caught by `list()`, without any secret | storage › integrity › editing id / type / publicKey / v of a key record fails closed | Chromium, Firefox, WebKit |
 | Any edit to a stored key record fails closed (`corrupted`), and the cases cover every field | storage › integrity › editing \<field\> of a key record fails closed (8 cases); › the edit cases cover every stored field of a key record | Chromium, Firefox, WebKit |
+| A field whose type changes but whose value doesn't (`"123"` for `123`, an `Array` or `Int8Array` for bytes) fails closed at `list()` | storage › integrity › changing a field type without changing its value fails closed at list: … (6 cases) | Chromium, Firefox, WebKit |
+| The canonical encoding keeps types and boundaries (`123` ≠ `"123"`, only `Uint8Array` counts as bytes) | storage › canonical encoding › each value keeps its type… | Chromium, Firefox, WebKit |
+| A planted key with a wrong-length public key fails closed at `list()` | storage › integrity › a planted key whose public key has the wrong length is rejected at list | Chromium, Firefox, WebKit |
+| A planted key with a degenerate public key fails closed at `sign()` | storage › integrity › a planted key with a degenerate public key is listed like any added key, and sign fails closed | Chromium, Firefox (skipped in WebKit, where verify crashes the tab: not protected) |
 | Ciphertexts swapped between records fail closed | storage › integrity › ciphertexts swapped between two key records fail closed | Chromium, Firefox, WebKit |
 | A key an attacker sealed to the public wrapping key is rejected, not used | storage › integrity › a key an attacker sealed to the public wrapping key decrypts, but is rejected instead of used | Chromium, Firefox, WebKit |
 | A record moved to another scope is rejected | storage › integrity › a key record moved to another scope is rejected there: its id binds the scope | Chromium, Firefox, WebKit |
 | Off-curve ephemeral public keys are rejected on import | storage › integrity › an off-curve ephemeral public key is rejected on import, in every engine | Chromium, Firefox, WebKit (the guard matters in WebKit, the only engine that goes red without it) |
-| Unknown format versions are rejected, not coerced | storage › format versioning › a header with an unknown format version is rejected, not coerced; storage › integrity › editing v… | Chromium, Firefox, WebKit |
+| Unknown format versions are rejected, not coerced | storage › format versioning › a header with format version 2 / 1 (string) / true / undefined is rejected, not coerced; storage › integrity › editing v…; › changing a field type…: v as the string '1' | Chromium, Firefox, WebKit |
 | Storage written by a newer format is rejected with `incompatible` | storage › format versioning › a database written by a newer format is rejected with incompatible | Chromium, Firefox, WebKit |
 | An open vault never blocks a newer format, and refuses to work afterwards | storage › format versioning › an open vault never blocks a newer format, and refuses to work afterwards | Chromium, Firefox, WebKit |
 | A multi-record write is atomic: a failed first generate leaves no header | vault › errors › the first generate writes header and key atomically: if the key write fails, no header remains | Chromium, Firefox, WebKit |
 | IndexedDB failures are classified as retryable `unavailable` | vault › errors › an IndexedDB failure is reported as retryable unavailable, and a retry succeeds | Chromium, Firefox, WebKit |
+| A transient key generation failure is retried; a persistent one is retryable `unavailable` | vault › errors › a transient key generation failure is retried; a persistent one is retryable unavailable | Chromium, Firefox, WebKit |
 | A missing key is `not-found` | vault › keys › signing with an unknown key id fails with not-found | Chromium, Firefox, WebKit |
-| A key record without a vault header is `corrupted`, never treated as a new vault | vault › errors › a key record without a vault header is corrupted, not unprotected | Chromium, Firefox, WebKit |
+| Key records without a vault header are `corrupted` in `list`, `generate` and `sign`, never a new vault; only `wipe` recovers | vault › errors › key records without a vault header are corrupted everywhere, never a new vault; only wipe recovers | Chromium, Firefox, WebKit |
+| A header stored as `undefined` is `corrupted`, not absent and not retryable | vault › errors › a header stored as undefined is corrupted, not absent and not a retryable failure | Chromium, Firefox, WebKit |
+| A database without Vault's stores is `corrupted`, not retryable | vault › errors › a database without Vault stores is corrupted, not a retryable failure | Chromium, Firefox, WebKit |
+| A call in flight across `close()` gets `InvalidStateError`, not a retryable error | vault › lifecycle › a call in flight when the vault is closed fails with InvalidStateError, not a retryable error | Chromium, Firefox, WebKit |
+| An unknown key type is a `TypeError` (programming error) | vault › lifecycle › an unknown key type is a programming error (TypeError), not a VaultError | Chromium, Firefox, WebKit |
 | Wipe removes every key and the header; the next vault has a new wrapping key | vault › keys › wipe removes every key and the vault header; the next generate starts a new vault | Chromium, Firefox, WebKit |
 | Delete removes exactly one key | vault › keys › delete removes only that key, and deleting a missing key is a no-op | Chromium, Firefox, WebKit |
 | Keys persist across reopen and page reload | vault › keys › keys survive closing and reopening the vault; `test/e2e/demo.spec.ts` › demo creates… | Chromium, Firefox, WebKit |
