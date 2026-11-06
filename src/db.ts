@@ -1,5 +1,5 @@
 import { VaultError } from './errors.ts';
-import { FORMAT_VERSION } from './records.ts';
+import { corrupted, FORMAT_VERSION } from './records.ts';
 
 export type Store = 'meta' | 'keys';
 
@@ -22,6 +22,11 @@ export function openDatabase(name: string, onGone: () => void): Promise<IDBDatab
     };
     request.onsuccess = () => {
       const db = request.result;
+      // Version 1 without our stores was created by something else (e.g. a bare indexedDB.open(name)).
+      if (!db.objectStoreNames.contains('meta') || !db.objectStoreNames.contains('keys')) {
+        db.close();
+        return reject(corrupted('database has no Vault stores'));
+      }
       db.onversionchange = () => {
         db.close(); // never block a newer format; our next call reopens and gets 'incompatible'
         onGone();
@@ -42,8 +47,8 @@ export function openDatabase(name: string, onGone: () => void): Promise<IDBDatab
 
 /**
  * Runs `body` in one transaction and resolves after it commits; if `body` throws, nothing is written.
- * `body` may await only IndexedDB requests: any other await (crypto included) ends the transaction
- * in Firefox and WebKit.
+ * `body` may await only IndexedDB requests (or promises built from them): an await that settles in a
+ * later task, crypto.subtle included, ends the transaction in Firefox and WebKit.
  */
 export async function transact<T>(
   db: IDBDatabase,

@@ -1,6 +1,6 @@
-import { base64url, encode, type Bytes } from './bytes.ts';
+import { base64url, encode, isBytes, type Bytes } from './bytes.ts';
 import { VaultError } from './errors.ts';
-import { isKeyTypeName, type KeyTypeName } from './key-types.ts';
+import { isKeyTypeName, keyTypes, type KeyTypeName } from './key-types.ts';
 import type { Sealed } from './seal.ts';
 
 /** Storage format version, and also the IndexedDB schema version: a newer format always bumps both. */
@@ -29,21 +29,43 @@ export interface KeyRecord {
 
 export type KeyFields = Omit<KeyRecord, 'sealed'>;
 
-/** The header, or undefined if the vault has none yet. */
-export function parseHeader(value: unknown): HeaderRecord | undefined {
-  if (value === undefined) return undefined;
-  const header = value as HeaderRecord | null;
-  if (header?.v !== FORMAT_VERSION || header.protection?.kind !== 'none') throw corrupted('vault header');
-  return header;
+// Everything read from IndexedDB is untrusted: each field's runtime type is checked, never coerced.
+
+export function parseHeader(value: unknown): HeaderRecord {
+  const header = value as Partial<HeaderRecord> | null | undefined;
+  if (
+    header?.v !== FORMAT_VERSION ||
+    !isBytes(header.wrappingPublicKey) ||
+    header.protection?.kind !== 'none' ||
+    !(header.protection.privateKey instanceof CryptoKey)
+  ) {
+    throw corrupted('vault header');
+  }
+  return header as HeaderRecord;
 }
 
 export async function parseKeyRecord(value: unknown): Promise<KeyRecord> {
-  const record = value as KeyRecord | null;
-  if (record?.v !== FORMAT_VERSION || !isKeyTypeName(record.type)) throw corrupted('key record');
+  const record = value as Partial<KeyRecord> | null | undefined;
+  const sealed = record?.sealed as Partial<Sealed> | undefined;
+  if (
+    record?.v !== FORMAT_VERSION ||
+    typeof record.scope !== 'string' ||
+    typeof record.id !== 'string' ||
+    !isKeyTypeName(record.type) ||
+    !isBytes(record.publicKey) ||
+    record.publicKey.length !== keyTypes[record.type].publicKeyLength ||
+    !Number.isSafeInteger(record.createdAt) ||
+    !isBytes(sealed?.ephemeralPublicKey) ||
+    !isBytes(sealed.iv) ||
+    sealed.iv.length !== 12 ||
+    !isBytes(sealed.ciphertext)
+  ) {
+    throw corrupted('key record');
+  }
   if (record.id !== (await keyId(record.scope, record.type, record.publicKey))) {
     throw corrupted(`key ${record.id}: id does not match its public key`);
   }
-  return record;
+  return record as KeyRecord;
 }
 
 /** Derived, so an edited public key, type or scope is caught without any secret. */
@@ -55,7 +77,7 @@ export async function keyId(scope: string, type: KeyTypeName, publicKey: Bytes):
 /** AES-GCM associated data: every stored field except the ciphertext itself, so any edit fails decryption. */
 export function keyAad(fields: KeyFields): Bytes {
   const { v, scope, id, type, publicKey, createdAt } = fields;
-  return encode('vault/v1/key', String(v), scope, id, type, publicKey, String(createdAt));
+  return encode('vault/v1/key', v, scope, id, type, publicKey, createdAt);
 }
 
 export function corrupted(what: string, cause?: unknown): VaultError {

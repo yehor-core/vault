@@ -1,5 +1,5 @@
 export type VaultErrorCode =
-  /** IndexedDB could not be opened or a transaction failed (I/O, quota, storage cleared). Retry may succeed. */
+  /** IndexedDB or WebCrypto failed in a way a retry may fix (I/O, quota, storage cleared, key generation). */
   | 'unavailable'
   /** A stored record is malformed, tampered with, or does not decrypt or verify. Vault never repairs it. */
   | 'corrupted'
