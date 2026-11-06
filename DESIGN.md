@@ -8,56 +8,86 @@ Rules for filling:
 - Self-contained: the decision log is not in the repository, so state each decision's outcome and rejected alternatives here, without links or decision IDs.
 -->
 
+Test references: `storage ›` = `test/unit/storage.test.ts`, `vault ›` = `test/unit/vault.test.ts`, `e2e ›` = `test/e2e/demo.spec.ts`. Unit tests run in Chromium, Firefox and WebKit.
+
 ## 1. Overview
 
-<!--
-One paragraph: what Vault is, who calls it, what it deliberately does not know (what keys sign).
-One line per goal (the six outcomes in TASK.md), each pointing to the section that delivers it.
-Scope cuts, if any: what and why (or link to §11).
--->
+Vault is a browser-native private-key store on IndexedDB. An application calls it to generate keys, list their public information and get signatures; private keys never leave it. Vault does not know or care what its keys sign.
+
+| Goal | Status | Where |
+|---|---|---|
+| No plaintext keys at rest | Built (unprotected mode) | §3.1, §4.1 |
+| Optional, upgradeable protection | Format ready; upgrade not built yet | §3.1, §5 |
+| Cheap to add, gated to use | Adding needs only the public wrapping key | §3.1 |
+| Many key types, one model | ed25519; key-type interface in place | §7.5 |
+| Correct under concurrency and failure | Atomic writes, fail-closed reads; multi-tab not tested yet | §4.2, §6 |
+| A small, idiomatic domain API | Built for unprotected ed25519 keys | §7 |
 
 ## 2. Threat model
 
 ### 2.1 Assets
 
-<!-- What we protect: private key material, the vault key / wrapping keys, record integrity, protection state (unprotected vs protected), key metadata (is it secret? say so). -->
+| Asset | Secret? |
+|---|---|
+| Private key material (ed25519 now; secp256k1 later) | Yes. Never leaves Vault through the API. |
+| Wrapping private key: decrypts every private key | Yes. In unprotected mode it is the root secret. |
+| Integrity of key records: Vault signs only with the key whose public key it lists | — |
+| Protection state (unprotected or passkey-protected) | Not built yet |
+| Key metadata: id, type, public key, createdAt | No. Stored in the clear, readable by anyone who can read storage. |
 
 ### 2.2 Adversaries and events
 
-<!-- Who or what, with capabilities: disk/profile copy, storage writer, snapshot restore, same-origin script, passkey loss, memory inspection, eviction, crash. Plus what is assumed trusted (browser, OS, authenticator, origin isolation). -->
+| Adversary or event | Capability |
+|---|---|
+| Profile or disk copy | Reads every IndexedDB file, offline, at any later time |
+| Storage writer: same-origin script, or someone editing the profile | Adds, edits, swaps, deletes any record; reads every public field |
+| Snapshot restore | Puts back an older, internally consistent copy of the database |
+| Same-origin script | Runs in the origin: calls the Vault API, opens the database itself, and uses the stored CryptoKeys |
+| Eviction, crash, closed tab | Storage is removed as a whole; a transaction is cut off midway |
+
+Trusted: the browser, its WebCrypto and IndexedDB implementations, the OS, and origin isolation.
 
 ### 2.3 Guarantees per case
 
-<!-- One row per required case and mode. "Enforced by" = code path or test. Fill "Not guaranteed" honestly. -->
-
 | Adversary or event | Mode | Guarantee | Not guaranteed | Enforced by |
 |---|---|---|---|---|
-| Copy of the browser profile or disk | Unprotected | | | |
-| | Protected | | | |
-| Records added or replaced by anyone who can write to storage | Both | | | |
-| Older storage snapshot restored | Both | | | |
-| Malicious script in the same origin while unlocked | Both | | | |
-| Lost, deleted or replaced passkey (protection passkey) | Protected | | | |
-| Lost, deleted or replaced passkey (passkey key) | Both | | | |
-| Secrets in memory | Both | | | |
-| Storage evicted by the browser | Both | | | |
-| Crash or closed tab mid-operation | Both | | | |
+| Copy of the browser profile or disk | Unprotected | Private keys are stored only as AES-256-GCM ciphertext. The only stored secret is the wrapping private key, a non-extractable CryptoKey held by the browser. | **Not protected against a profile copy.** The browser keeps the root key's bytes in the profile, so the copy, opened in the same browser or parsed, recovers every key. | `storage › no private key bytes are stored: only ciphertext and a non-extractable root key` |
+| | Protected | Not built yet | | |
+| Records added or replaced by anyone who can write to storage | Both | `list()`, with no secret, rejects an edited id, type, public key, version or scope. `sign()` rejects an edit to any other field: a changed byte, swapped ciphertexts, an off-curve ephemeral key. It also rejects a key the attacker sealed to the public wrapping key: that ciphertext decrypts cleanly, so the signature check before returning catches it. All of these fail with `corrupted`. | A complete new key record needs no secret, so an added key can't be told from a real one. Deleting records isn't detected. Edits to createdAt and to the ciphertext surface only when the key is used. A replaced header is not detected at list time (§11). | `storage › editing <field> of a key record fails closed` (8 cases plus a coverage check), `› ciphertexts swapped…`, `› a key an attacker sealed…`, `› an off-curve ephemeral public key…`, `› a key record moved to another scope…` |
+| Older storage snapshot restored | Both | — | **Not detected.** A consistent older copy is a valid state: keys deleted since then reappear, keys added since then vanish. IndexedDB is the only store, so there is nowhere to anchor a counter. | not protected |
+| Malicious script in the same origin while unlocked | Unprotected | The API never returns private key bytes. Vault keeps no secret in memory between calls. | **Not protected.** The script can sign with every key, and can open the database and use the root key to unwrap every key as extractable, which exfiltrates them. | `src/vault.ts` (no export method) |
+| Lost, deleted or replaced passkey (protection passkey) | Protected | Not built yet | | |
+| Lost, deleted or replaced passkey (passkey key) | Both | Not built yet | | |
+| Secrets in memory | Both | Ed25519 private keys exist only as CryptoKey objects: sealed with `wrapKey`, opened with `unwrapKey` into a non-extractable key, never as JS bytes. Per-key AES keys and the ECDH result stay inside `deriveKey`. | JS can't zero memory, and the browser may hold internal copies. A CryptoKey lives until garbage collection. | `src/ed25519.ts`, `src/seal.ts` |
+| Storage evicted by the browser | Both | An empty database behaves as a new vault. | Can't be told apart from a vault that was never used or was wiped. Requesting persistent storage: not decided yet. | `vault › opening and listing write nothing; the first generate creates the vault` |
+| Crash or closed tab mid-operation | Both | Every multi-record change is one IndexedDB transaction, so a crash leaves the old state or the new one. | Crash during `wipe()` is not tested (it is one transaction). | `vault › the first generate writes header and key atomically…`, `src/db.ts` `transact` |
 
 ### 2.4 Out of scope for the threat model
 
-<!-- Compromised browser/OS, malicious extensions, XSS prevention itself, physical attacks on authenticators, side channels. One line each. -->
+- A compromised browser or OS, and malicious browser extensions: they see everything the page sees.
+- Preventing XSS. Vault limits what injected code gets (§2.3); it doesn't stop the injection.
+- Physical and side-channel attacks on the machine or the authenticator.
+- Timing side channels in JS. WebCrypto does the secret-dependent work.
 
 ## 3. Key protection
 
 ### 3.1 Key hierarchy
 
-<!--
-What encrypts what, in each mode. A small diagram or nested list:
-  root secret → vault key → per-key wrapping → private key.
-Unprotected mode: where the root comes from and exactly what protects it.
-Protected mode: how the passkey secret (PRF) becomes the root; what is never stored.
-How many passkeys can unlock a vault (decided: exactly one) and the consequence for passkey loss.
--->
+```
+vault wrapping key pair — ECDH P-256, one per vault, in the header record
+├─ public half: SPKI, stored in the clear. Sealing a new key needs only this, so adding a key never needs an unlock.
+└─ private half
+   ├─ unprotected: stored as a non-extractable CryptoKey (usage deriveKey only)
+   └─ passkey-protected: not built yet (wrapped under a passkey-derived key; never stored in the clear)
+
+private key (one per key record), sealed by ECIES:
+  ephemeral P-256 key pair → ECDH with the wrapping public key → HKDF-SHA-256 (info = both public keys)
+  → AES-256-GCM (random 96-bit IV, AAD = every stored field of the record) → wrapKey('pkcs8')
+```
+
+- **Unprotected mode is protected only by the browser.** The root is a CryptoKey that JS can use but not read. That stops a leaked record dump or log from revealing keys, but not a profile copy or same-origin code (§2.3).
+- **Enabling protection (not built yet)** will generate a *fresh* wrapping key pair, re-seal every key to it and replace the header, all in one transaction. Rotating rather than rewrapping matters: a profile copy taken while unprotected, or leftover data the storage engine never overwrote, then can't decrypt keys added after protection is on.
+- Exactly one passkey can unlock a vault.
 
 ### 3.2 Passkey keys
 
@@ -71,39 +101,74 @@ What Vault stores about a passkey key and what it can do without that record.
 
 | Purpose | Primitive | Source | Why this source |
 |---|---|---|---|
-| | | | |
+| Seal private keys | AES-256-GCM, random 96-bit IV, AAD | WebCrypto | Native in all engines |
+| Key agreement for sealing | ECDH P-256, ephemeral–static | WebCrypto | Native. X25519 rejected: WebKit silently drops X25519 CryptoKeys stored in IndexedDB (they read back as `null`). |
+| Key derivation | HKDF-SHA-256 over the ECDH output | WebCrypto | Native; done with `deriveKey`, so the shared secret never becomes JS bytes |
+| Point validation | SPKI import | WebCrypto | WebKit accepts off-curve points in `raw` and `jwk` import, but every engine rejects them in `spki`: `storage › an off-curve ephemeral public key is rejected…` |
+| ed25519 signatures | Ed25519 (RFC 8032) | WebCrypto | Native in all three engines |
+| Key ids | SHA-256 | WebCrypto | Native |
+| Randomness | `getRandomValues`, `generateKey` | WebCrypto | Native |
 
-<!-- One row per primitive (encryption, key derivation, signing per key type, randomness). Every third-party crypto dependency justified here. -->
+There are no third-party cryptographic dependencies yet. The sealing construction (`src/seal.ts`) composes native primitives in the shape of HPKE base mode: a one-time key per seal, both public keys in the KDF context, and AEAD with associated data. It is not wire-compatible with HPKE.
 
 ## 4. Storage layout
 
 ### 4.1 Records
 
+One IndexedDB database (default name `vault`); schema version 1.
+
 | Store / record | Key | Contents | Encrypted | Integrity-bound to |
 |---|---|---|---|---|
-| | | | | |
+| `meta` / header | `'header'` | `v`, `wrappingPublicKey` (SPKI), `protection: { kind: 'none', privateKey: CryptoKey }` | The private key is a non-extractable CryptoKey held by the browser | Not integrity-protected (§11) |
+| `keys` / key | `[scope, id]` | `v`, `scope`, `id`, `type`, `publicKey`, `createdAt`, `sealed: { ephemeralPublicKey (SPKI), iv, ciphertext }` | `ciphertext` only | `id` = SHA-256(scope, type, public key), checked by `list()`. AAD = every field except `sealed`. HKDF binds the ephemeral key and the wrapping public key. |
 
-<!-- Also: how scopes map onto storage. -->
+Scopes are the first component of the key, so one scope is one key range. Only the scope `default` is used so far. Every hashed or authenticated value is length-prefixed (`src/bytes.ts` `encode`), so field boundaries can't shift.
 
 ### 4.2 Validation and fail-closed behaviour
 
-<!-- How each read is checked (shape, version, authenticity, binding to its slot). What a failure returns. Why Vault never repairs. Which tampering is detected at read time and which is not. -->
+| Check | When | Failure |
+|---|---|---|
+| `v` is exactly 1 (header and key records) | every read | `corrupted`: `storage › a header with an unknown format version…`, `› editing v…` |
+| Header is present and its protection kind is known (`null`, which WebKit returns for an unreadable value, counts as tampered) | `generate`, `sign` | `corrupted` |
+| A key record with no header is never treated as a new vault | `sign` | `corrupted`: `vault › a key record without a vault header is corrupted, not unprotected` |
+| Type is a registered key type; id matches the hash | `list`, `sign`, without any secret | `corrupted` |
+| Ephemeral key imports as SPKI → AES-GCM decrypt with AAD → sign → verify against the stored public key | `sign` | `corrupted` |
+
+Vault never repairs: no code path writes back a record it failed to read. A failed check rejects the whole call, so `list()` fails if any key in the scope is bad. Not yet validated: the type of every field. A record with a missing or mistyped field can surface as an unclassified `TypeError` (§11).
 
 ### 4.3 Versioning and migration
 
-<!-- Where the version lives, what "unknown version" does, and how a future format change migrates (who runs it, atomicity, multi-tab interaction with an older Vault build). -->
+- One number is both the storage format version and the IndexedDB schema version. Every record also carries `v`.
+- A database at a higher schema version fails `open()` with `incompatible`: `storage › a database written by a newer format is rejected with incompatible`. An older build never reads or writes a newer format.
+- A record with `v ≠ 1` inside a version-1 database is `corrupted`, not `incompatible`: a legitimate newer format bumps the schema version first, so no Vault build writes such a record.
+- Open connections close on `versionchange`, so a newer build is never blocked by an old tab. The old tab's next call then fails with `incompatible`: `storage › an open vault never blocks a newer format…`.
+- **Migration (not built):** a v2 build opens with schema version 2 and changes structure in the upgrade callback, which is atomic. Re-encryption can't run there, because the callback can't await crypto. So it happens lazily per record, which per-record `v` allows: read a v1 record, re-seal it, write v2 in a normal transaction.
 
 ### 4.4 Eviction and persistent storage
 
-<!-- Position on navigator.storage.persist(). What Vault does when it finds itself empty, and how it tells "never used" from "evicted" (or why it cannot). -->
+An empty database (no header, no keys) behaves as a new vault: `list()` returns `[]` and the first `generate()` creates the vault. Vault can't tell "never used", "wiped" and "evicted" apart. Browsers evict an origin's storage as a whole, and IndexedDB is its only store.
+
+<!-- Position on navigator.storage.persist(): decided with storage integrity. -->
 
 ## 5. Lifecycle and state transitions
 
-<!-- States: empty, unprotected, protected+locked, protected+unlocked, wiped (and closed, if distinct). Diagram (mermaid stateDiagram-v2) plus the table below. -->
+```mermaid
+stateDiagram-v2
+  [*] --> Empty
+  Empty --> Unprotected: generate
+  Unprotected --> Unprotected: generate, delete
+  Unprotected --> Empty: wipe
+  Empty --> Empty: list, wipe
+```
+
+"Wiped" is the state Empty, and there is no separate state. Protected, locked and unlocked arrive with passkey protection. `close()` ends one instance (every later call throws `InvalidStateError`); the stored state doesn't change.
 
 | From | Operation | To | Prompts | Atomic how | On failure |
 |---|---|---|---|---|---|
-| | | | | | |
+| Empty | `generate` | Unprotected | none | Header and key added in one transaction; the header is added only if still absent | Nothing written: `vault › the first generate writes header and key atomically…` |
+| Unprotected | `generate` | Unprotected | none | One transaction re-checks the header and adds the key | Nothing written |
+| Unprotected | `delete` | Unprotected | none | One request | Nothing deleted |
+| Any | `wipe` | Empty | none | Both stores cleared in one transaction | Nothing cleared |
 
 ### 5.1 Enabling protection
 
@@ -119,39 +184,83 @@ What Vault stores about a passkey key and what it can do without that record.
 
 ### 5.4 Wipe
 
-<!-- What is removed, atomicity, what other contexts see, why a stale context cannot resurrect data. -->
+`wipe()` clears the header and every key in one transaction: `vault › wipe removes every key and the vault header; the next generate starts a new vault`. The next `generate()` creates a new wrapping key pair, so nothing sealed before the wipe can be opened afterwards. `generate` re-reads the header inside its write transaction, so a key sealed to the wiped vault can't land. Wipe doesn't erase what the storage engine has not yet overwritten on disk.
 
 ## 6. Concurrency and crash safety
 
-<!--
-Cover each requirement explicitly:
-- multi-record changes are atomic (crash → old or new state);
-- no lost updates between tabs/frames;
-- concurrent first-time setup converges;
-- a stale context cannot undo a wipe or a protection change;
-- other contexts learn about changes (mechanism, and what happens if a notification is missed).
--->
+Firefox and WebKit end an IndexedDB transaction at the first await that isn't an IndexedDB request, and `crypto.subtle` counts (Chromium happens not to). So all crypto runs **before** a transaction, and the transaction only checks and writes (`src/db.ts` `transact`).
+
+| Requirement | Mechanism | Verified by |
+|---|---|---|
+| Multi-record changes are atomic | One transaction per change; a throwing body aborts it | `vault › the first generate writes header and key atomically…` |
+| No lost updates | Readwrite transactions on overlapping stores run one at a time across tabs. `generate` re-reads the header inside its write transaction and adds only if the header is the one it sealed to; otherwise it redoes the whole operation, up to 3 times, then fails with `unavailable`. | `src/vault.ts` `generate`; multi-tab tests not written yet |
+| Concurrent first-time setup converges | The header is added only if absent, inside the write transaction; the loser redoes against the winner's header | `src/vault.ts` `generate`; multi-tab tests not written yet |
+| A stale context can't undo a wipe | As above: a write sealed to a wiped header fails its check | `src/vault.ts` `generate`; multi-tab tests not written yet |
+| Other contexts learn about changes | Not built yet | |
 
 ## 7. Public API
 
 ### 7.1 Surface
 
-<!-- The types and methods, as a short TypeScript excerpt. Show how the types make invalid states hard to express (e.g. which operations exist on a locked vault). -->
+```ts
+class Vault {
+  static open(options?: { name?: string }): Promise<Vault>;
+  generate(type: KeyTypeName): Promise<KeyInfo>;      // never prompts
+  list(): Promise<KeyInfo[]>;                          // oldest first, never prompts
+  sign(id: string, data: Uint8Array): Promise<Signature>;
+  delete(id: string): Promise<void>;                   // missing key: no-op
+  wipe(): Promise<void>;
+  close(): void;
+}
+type KeyTypeName = 'ed25519';
+interface KeyInfo { id: string; type: KeyTypeName; publicKey: Uint8Array; createdAt: Date }
+type Signature = { type: 'ed25519'; bytes: Uint8Array };   // a union discriminated by type
+class VaultError extends Error { code: VaultErrorCode; retryable: boolean }
+```
+
+How the types prevent misuse: `generate` accepts only registered key type names. `Signature` is a union discriminated by `type`, so a key type with a different signature shape (a passkey assertion) is another member, not a breaking change. There is no method that returns private key material.
 
 ### 7.2 Usage examples
 
-<!-- Create, list, sign + verify outside Vault, enable protection, unlock, add passkey key, sign with passkey key on a fresh device, delete, wipe, scopes. -->
+```ts
+import { Vault, VaultError } from 'vault';
+
+const vault = await Vault.open();
+const key = await vault.generate('ed25519');            // { id, type, publicKey, createdAt }
+const keys = await vault.list();
+
+const data = new TextEncoder().encode('hello');
+const signature = await vault.sign(key.id, data);
+
+// Anyone with the public key verifies, without Vault:
+const publicKey = await crypto.subtle.importKey('raw', key.publicKey, 'Ed25519', false, ['verify']);
+await crypto.subtle.verify('Ed25519', publicKey, signature.bytes, data);   // true
+
+await vault.delete(key.id);
+await vault.wipe();
+
+try {
+  await vault.sign(key.id, data);
+} catch (e) {
+  if (e instanceof VaultError && e.code === 'not-found') { /* … */ }
+}
+```
 
 ### 7.3 Errors
 
+All failures are `VaultError` with a `code`; `retryable` is true only for `unavailable`, and the underlying error is in `cause` (`src/errors.ts`).
+
 | Situation | Error type | Retryable | Caller should |
 |---|---|---|---|
-| Infrastructure fault (transient) | | | |
-| Corrupted or tampered storage | | | |
-| Prompt declined or cancelled | | | |
-| Vault locked | | | |
-| Key not found | | | |
-| Passkey protection unsupported | | | |
+| Infrastructure fault (transient) | `unavailable` | yes | Retry; check quota or storage access if it persists. `vault › an IndexedDB failure is reported as retryable unavailable…` |
+| Corrupted or tampered storage | `corrupted` | no | Stop using the vault and tell the user; Vault doesn't repair. §4.2 tests |
+| Storage written by a newer format | `incompatible` | no | Reload with the newer build. `storage › a database written by a newer format…` |
+| Prompt declined or cancelled | Not built yet | | |
+| Vault locked | Not built yet | | |
+| Key not found | `not-found` | no | Refresh the key list. `vault › signing with an unknown key id fails with not-found` |
+| Passkey protection unsupported | Not built yet | | |
+
+Use after `close()` is a programming error and throws a `DOMException` `InvalidStateError`, as IndexedDB does: `vault › a closed vault rejects every call`.
 
 ### 7.4 Prompts and user gestures
 
@@ -159,11 +268,30 @@ Cover each requirement explicitly:
 
 ### 7.5 Adding a key type
 
-<!-- The interface a key type implements and where it is registered. Show that the core does not branch on type names. -->
+A key type implements `KeyType` (`src/key-types.ts`) and is added to the `keyTypes` registry. The core calls only these methods and never branches on a type name.
+
+```ts
+interface KeyType {
+  generate(): Promise<{ publicKey: Uint8Array; seal(cipher: Cipher): Promise<ArrayBuffer> }>;
+  sign(sealed: Uint8Array, cipher: Cipher, data: Uint8Array): Promise<Uint8Array>;
+  verify(publicKey: Uint8Array, signature: Uint8Array, data: Uint8Array): Promise<boolean>;
+}
+```
+
+The core hands the type an AES-GCM key bound to the record (`Cipher`), and the type decides how its private key is sealed: ed25519 uses `wrapKey` (`src/ed25519.ts`).
 
 ## 8. Browser support and degradation
 
-<!-- Reasoning only; the matrix lives in README. Where passkey features degrade (PRF at create vs get, UV, discoverable credentials), what Vault detects up front, and what it can only detect on failure. -->
+Storage and crypto facts this design depends on, measured in the engines Playwright 1.64.1 ships (Chromium 156, Firefox 157, WebKit 27.2):
+
+| Fact | Chromium | Firefox | WebKit | Consequence |
+|---|---|---|---|---|
+| Ed25519, ECDH P-256, HKDF, AES-GCM `wrapKey`/`unwrapKey` | ✓ | ✓ | ✓ | All crypto is WebCrypto |
+| X25519 CryptoKey survives IndexedDB | ✓ | ✓ | ✗ (reads back `null`) | P-256 for the wrapping key |
+| Off-curve P-256 point rejected by `raw` / `jwk` import | ✓ | ✓ | ✗ | Points are imported only as SPKI |
+| Transaction survives `await crypto.subtle` | yes | no | no | Crypto never runs inside a transaction |
+
+<!-- Passkey features: where PRF at create vs get, UV and discoverable credentials degrade; what Vault detects up front and what only on failure. -->
 
 ## 9. Embedding for other origins (not built)
 
@@ -173,10 +301,23 @@ Cover each requirement explicitly:
 
 | Topic | Chosen | Rejected | Why | Given up |
 |---|---|---|---|---|
-| | | | | |
-
-<!-- Only the decisions a reviewer would challenge. -->
+| Key hierarchy | ECIES (P-256) to a vault wrapping key pair; unprotected root = the non-extractable private half; protection rotates the key pair | X25519 with an AES "device key" wrapping the private half, protection rewraps only the header | A stable key pair means a profile copy taken while unprotected decrypts keys added after protection | A protection upgrade that re-seals every key and must redo on a concurrent add |
+| | | RSA-OAEP-3072 with native `wrapKey` (OAEP label as AAD) | Key generation measured at 150–620 ms, 384 B per sealed key, padding-oracle class | A construction composed of several native calls instead of one |
+| | | One symmetric vault key | Can't seal a new key while locked | — |
+| Key id | SHA-256 of scope, type and public key | Random UUID | A derived id lets `list()` catch an edited public key, type or scope without any secret, and gives a passkey the same id on every device | One hash per key on `list()`; 43-character ids |
+| Associated data | Every stored field of the key record, plus verifying each signature before returning it | Identity fields only, labels outside | Any edit fails closed; the verify catches a substituted key that decrypts cleanly | Labels and metadata are immutable after generate |
+| Versioning | Schema version = format version, and `v` in every record | Version in the header only | Re-encrypting migrations can't run in the upgrade callback; per-record versions let them run lazily | One field per record |
+| Concurrency | Crypto first, then one transaction that re-checks the header | Web Locks around read → crypto → write | IndexedDB alone gives atomicity and serialization; no lock is ever held across a passkey prompt | Crypto is wasted on a conflict |
+| `sign` result | Union discriminated by `type` | Bare `Uint8Array`; key handles with methods | Passkey assertions need more than signature bytes; handles go stale across tabs | Callers narrow on `type` |
+| Errors | One `VaultError` with `code` | A subclass per category | Exhaustive `switch`; codes survive `postMessage`; `instanceof` fails across realms | No `instanceof` per category |
+| Lifecycle | The vault is created by its first write; wipe empties it for every instance | Eager creation in `open()`; wipe closes every instance | Reads never write; one rule for wipe | "Wiped" and "never used" are the same state |
 
 ## 11. Known limitations
 
-<!-- Honest list: what is not protected, what is not tested in which engine, what was cut and why. -->
+- **Unprotected mode doesn't protect against a profile copy or same-origin code** (§2.3). That is what passkey protection is for.
+- **Records are not yet fully validated.** A record with a missing or mistyped field may fail with an unclassified `TypeError` instead of `corrupted`.
+- **The header is not integrity-protected.** A writer who replaces it with their own wrapping key pair makes existing keys fail at `sign()` (`corrupted`), and gets new keys sealed to their key. `list()` doesn't notice.
+- **One bad record fails all of `list()`** for its scope (fail closed).
+- **An unknown key type is `corrupted`.** A future key type must bump the format version, so older builds see `incompatible` instead.
+- **Concurrency mechanisms (§6) are implemented but not yet tested across tabs**, and other contexts are not notified of changes.
+- Only the `default` scope and the ed25519 key type exist; there are no labels or metadata.
