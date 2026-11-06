@@ -42,9 +42,8 @@ describe('keys', () => {
 
     expect(signature.type).toBe('ed25519');
     expect(signature.bytes).toHaveLength(64);
-    const [publicKey, bytes] = [new Uint8Array(key.publicKey), new Uint8Array(signature.bytes)];
-    expect(await verifyWithWebCrypto(publicKey, bytes, message)).toBe(true);
-    expect(await verifyWithWebCrypto(publicKey, bytes, new TextEncoder().encode('other'))).toBe(false);
+    expect(await verifyWithWebCrypto(key.publicKey, signature.bytes, message)).toBe(true);
+    expect(await verifyWithWebCrypto(key.publicKey, signature.bytes, new TextEncoder().encode('other'))).toBe(false);
   });
 
   test('keys survive closing and reopening the vault', async () => {
@@ -56,7 +55,7 @@ describe('keys', () => {
     try {
       expect(await reopened.list()).toEqual([key]);
       const signature = await reopened.sign(key.id, message);
-      expect(await verifyWithWebCrypto(new Uint8Array(key.publicKey), new Uint8Array(signature.bytes), message)).toBe(true);
+      expect(await verifyWithWebCrypto(key.publicKey, signature.bytes, message)).toBe(true);
     } finally {
       reopened.close();
     }

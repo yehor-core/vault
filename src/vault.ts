@@ -23,12 +23,12 @@ export interface KeyInfo {
   readonly id: string;
   readonly type: KeyTypeName;
   /** ed25519: the 32-byte RFC 8032 public key. */
-  readonly publicKey: Uint8Array;
+  readonly publicKey: Uint8Array<ArrayBuffer>;
   readonly createdAt: Date;
 }
 
 /** ed25519: a 64-byte RFC 8032 signature over the exact bytes passed to `sign`. */
-export type Signature = { readonly type: 'ed25519'; readonly bytes: Uint8Array };
+export type Signature = { readonly type: 'ed25519'; readonly bytes: Uint8Array<ArrayBuffer> };
 
 export interface OpenOptions {
   /** IndexedDB database name. Default: `vault`. */

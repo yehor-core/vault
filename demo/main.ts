@@ -49,8 +49,8 @@ async function sign(key: KeyInfo) {
   const message = new TextEncoder().encode(messageInput.value);
   const signature = await vault.sign(key.id, message);
   // Verification needs only the public key: no Vault involved.
-  const publicKey = await crypto.subtle.importKey('raw', new Uint8Array(key.publicKey), 'Ed25519', false, ['verify']);
-  const verified = await crypto.subtle.verify('Ed25519', publicKey, new Uint8Array(signature.bytes), message);
+  const publicKey = await crypto.subtle.importKey('raw', key.publicKey, 'Ed25519', false, ['verify']);
+  const verified = await crypto.subtle.verify('Ed25519', publicKey, signature.bytes, message);
   output.dataset.signature = hex(signature.bytes);
   output.dataset.verified = String(verified);
   output.textContent = [
