@@ -44,7 +44,7 @@ Needs WebCrypto Ed25519, ECDH P-256, HKDF and AES-GCM, plus IndexedDB, in a secu
 
 ## Property → test
 
-Unit tests: `test/unit/vault.test.ts` (vault ›) and `test/unit/storage.test.ts` (storage ›). Every unit test runs in all three engines. For each hard-property row below, breaking the guarded code once turned the test red in the engines listed.
+Unit tests: `test/unit/vault.test.ts` (vault ›) and `test/unit/storage.test.ts` (storage ›). Every unit test runs in all three engines. Each row was break-checked: the guarding code was broken once and the test went red in every listed engine. Where two guards protect one property, both were broken together. The exceptions are the two platform rows, "Keys persist" and "Opening and listing write nothing", which are functional checks.
 
 | Property | Test | Engines |
 |---|---|---|
