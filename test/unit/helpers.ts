@@ -1,5 +1,11 @@
-import { expect } from 'vitest';
+import { expect, vi } from 'vitest';
 import { Vault, VaultError, type VaultErrorCode } from '../../src/index.ts';
+
+/** Date.now() advancing 1 ms per call, so keys never share a creation millisecond. Restored by vi.restoreAllMocks. */
+export function tickingClock(): void {
+  let now = Date.now();
+  vi.spyOn(Date, 'now').mockImplementation(() => ++now);
+}
 
 const cleanups: (() => Promise<void>)[] = [];
 
@@ -48,8 +54,9 @@ export async function rawRun<T>(name: string, stores: Store[], body: (tx: IDBTra
 }
 
 export const readHeader = (name: string) => rawRun<any>(name, ['meta'], (tx) => tx.objectStore('meta').get('header'));
-export const writeHeader = (name: string, header: object) =>
+export const writeHeader = (name: string, header: unknown) =>
   rawRun(name, ['meta'], (tx) => void tx.objectStore('meta').put(header, 'header'));
+export const deleteHeader = (name: string) => rawRun(name, ['meta'], (tx) => void tx.objectStore('meta').delete('header'));
 export const readKey = (name: string, id: string) =>
   rawRun<any>(name, ['keys'], (tx) => tx.objectStore('keys').get(['default', id]));
 export const readAll = async (name: string) => ({

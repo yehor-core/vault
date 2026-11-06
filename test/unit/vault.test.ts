@@ -2,12 +2,14 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import { Vault } from '../../src/index.ts';
 import {
   cleanup,
+  deleteHeader,
+  done,
   expectVaultError,
   openVault,
   readAll,
   readHeader,
-  readKey,
-  replaceKey,
+  tickingClock,
+  writeHeader,
 } from './helpers.ts';
 
 afterEach(async () => {
@@ -62,6 +64,7 @@ describe('keys', () => {
   });
 
   test('keys are listed oldest first', async () => {
+    tickingClock();
     const { vault } = await openVault();
     const keys = [];
     for (let i = 0; i < 4; i++) keys.push(await vault.generate('ed25519'));
@@ -123,6 +126,19 @@ describe('lifecycle', () => {
     await expect(vault.list()).rejects.toMatchObject({ name: 'InvalidStateError' });
     await expect(vault.generate('ed25519')).rejects.toMatchObject({ name: 'InvalidStateError' });
   });
+
+  test('a call in flight when the vault is closed fails with InvalidStateError, not a retryable error', async () => {
+    const { vault } = await openVault();
+    await vault.generate('ed25519');
+    const pending = [vault.generate('ed25519'), vault.list(), vault.sign('any', message)];
+    vault.close();
+    for (const call of pending) await expect(call).rejects.toMatchObject({ name: 'InvalidStateError' });
+  });
+
+  test('an unknown key type is a programming error (TypeError), not a VaultError', async () => {
+    const { vault } = await openVault();
+    await expect(vault.generate('secp256k1' as never)).rejects.toThrow(new TypeError('Unknown key type: secp256k1'));
+  });
 });
 
 describe('errors', () => {
@@ -150,13 +166,52 @@ describe('errors', () => {
     expect(await readAll(name)).toEqual({ meta: [], keys: [] });
   });
 
-  test('a key record without a vault header is corrupted, not unprotected', async () => {
+  test('key records without a vault header are corrupted everywhere, never a new vault; only wipe recovers', async () => {
     const { vault, name } = await openVault();
     const key = await vault.generate('ed25519');
-    const record = await readKey(name, key.id);
-    await vault.wipe();
-    await replaceKey(name, key.id, record);
+    await deleteHeader(name);
 
+    await expectVaultError(vault.list(), 'corrupted');
+    await expectVaultError(vault.generate('ed25519'), 'corrupted');
     await expectVaultError(vault.sign(key.id, message), 'corrupted');
+    expect((await readAll(name)).meta).toEqual([]);
+
+    await vault.wipe();
+    await expect(vault.generate('ed25519')).resolves.toMatchObject({ type: 'ed25519' });
+  });
+
+  test('a header stored as undefined is corrupted, not absent and not a retryable failure', async () => {
+    const { vault, name } = await openVault();
+    await writeHeader(name, undefined);
+
+    await expectVaultError(vault.list(), 'corrupted');
+    await expectVaultError(vault.generate('ed25519'), 'corrupted');
+  });
+
+  test('a database without Vault stores is corrupted, not a retryable failure', async () => {
+    const name = `test-${crypto.randomUUID()}`;
+    (await done(indexedDB.open(name))).close(); // version 1, no stores: what a bare open(name) leaves
+    try {
+      await expectVaultError(Vault.open({ name }), 'corrupted');
+    } finally {
+      await done(indexedDB.deleteDatabase(name));
+    }
+  });
+
+  test('a transient key generation failure is retried; a persistent one is retryable unavailable', async () => {
+    const { vault } = await openVault();
+    const generateKey = crypto.subtle.generateKey.bind(crypto.subtle) as (...args: unknown[]) => Promise<unknown>;
+    let failures = 0;
+    vi.spyOn(crypto.subtle, 'generateKey').mockImplementation(((algorithm: unknown, ...rest: unknown[]) =>
+      algorithm === 'Ed25519' && failures-- > 0
+        ? Promise.reject(new DOMException('simulated engine failure', 'OperationError'))
+        : generateKey(algorithm, ...rest)) as never);
+
+    failures = 4;
+    await expect(vault.generate('ed25519')).resolves.toMatchObject({ type: 'ed25519' });
+    failures = 5;
+    const error = await expectVaultError(vault.generate('ed25519'), 'unavailable');
+    expect(error.retryable).toBe(true);
+    expect(error.cause).toMatchObject({ name: 'OperationError' });
   });
 });
