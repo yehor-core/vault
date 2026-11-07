@@ -64,7 +64,7 @@ function toField(part: unknown): Bytes {
   return concatBytes(Uint8Array.of(tag), uint32ToBytes(data.length), data);
 }
 
-export function concatBytes(...arrays: Uint8Array[]): Bytes {
+function concatBytes(...arrays: Uint8Array[]): Bytes {
   const out = new Uint8Array(arrays.reduce((size, array) => size + array.length, 0));
   let offset = 0;
   for (const array of arrays) {
