@@ -1,5 +1,7 @@
 import type { KeyType } from './key-types.ts';
 
+// WebKit fails ~0.7% of generations, independently: all 5 attempts fail with p ≈ 0.007⁵ ≈ 2·10⁻¹¹ (3 would be
+// ≈ 3·10⁻⁷, once per ~3 million keys), and a persistent failure still surfaces quickly as 'unavailable'.
 const ATTEMPTS = 5;
 
 /** Ed25519 (RFC 8032) on WebCrypto. The private key travels only as a CryptoKey, never as JS bytes. */
