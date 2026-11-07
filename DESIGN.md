@@ -124,13 +124,20 @@ One IndexedDB database (default name `vault`); schema version 1.
 
 Scopes are the first component of the key, so one scope is one key range. Only the scope `default` is used so far. Every hashed or authenticated value goes through one canonical encoding (`src/bytes.ts` `encode`): each part is a type tag, a 4-byte length and its bytes. Strings are UTF-8, bytes only `Uint8Array`, integers only safe non-negative values as 8 bytes big-endian. So field boundaries can't shift, and `123` and `"123"` never encode alike: `storage › each value keeps its type…`. The exact bytes are part of format v1 and pinned by a known-answer test, `storage › encodes the exact v1 bytes…`.
 
+Code layout:
+- `src/db.ts`: the connection and the transaction helper.
+- `src/storage.ts`: record access inside a transaction, store names, scope ranges. No crypto.
+- `src/records.ts`: the format, parsing and validation.
+- `src/seal.ts`: sealing.
+- `src/vault.ts`: composes them into the public API.
+
 ### 4.2 Validation and fail-closed behaviour
 
 | Check | When | Failure |
 |---|---|---|
 | `v` is the number 1, never coerced (header and key records) | every read | `corrupted`: `storage › a header with format version 2 / '1' / true / undefined…`, `› editing v…`, `› changing a field type…: v as the string '1'` |
 | Header fields have their exact types: wrapping public key bytes, a known protection kind, a CryptoKey root. A header key whose value is `undefined` (or `null`, which WebKit returns for an unreadable value) is malformed, not absent. | `list`, `generate`, `sign` | `corrupted`: `vault › a header stored as undefined…` |
-| Key records without a header mean a deleted header, never a new vault: only `wipe()` works | `list`, `generate`, `sign` | `corrupted`: `vault › key records without a vault header are corrupted everywhere…` |
+| Key records without a header mean a deleted header, never a new vault: only `wipe()` works | `list`, `generate`, `sign` (`src/storage.ts` `readHeader`) | `corrupted`: `vault › key records without a vault header are corrupted everywhere…` |
 | Key record fields have their exact types: scope and id strings, a registered type, the public key a `Uint8Array` of the type's length, createdAt a safe non-negative integer, sealed fields `Uint8Array`, a 12-byte IV | `list`, `sign`, without any secret | `corrupted`: `storage › changing a field type…` (6 cases), `› a negative createdAt…`, `› a planted key whose public key has the wrong length…` |
 | Id matches the hash of scope, type and public key | `list`, `sign`, without any secret | `corrupted`: `storage › editing id / type / publicKey…` |
 | Ephemeral key imports as SPKI → AES-GCM decrypt with AAD → sign → verify against the stored public key | `sign` | `corrupted` |
@@ -196,15 +203,15 @@ stateDiagram-v2
 
 ## 6. Concurrency and crash safety
 
-A transaction ends once control returns to the event loop with no request pending. Awaiting a request's promise continues in a microtask and keeps it alive. But in Firefox and WebKit, an await that settles in a later task, `crypto.subtle` included, ends it (Chromium happens to keep it). So all crypto runs **before** a transaction, and the transaction only checks and writes (`src/db.ts` `transact`).
+A transaction ends once control returns to the event loop with no request pending. Awaiting a request's promise continues in a microtask and keeps it alive. But in Firefox and WebKit, an await that settles in a later task, `crypto.subtle` included, ends it (Chromium happens to keep it). So all crypto runs **before** a transaction, and the transaction only checks and writes (`src/db.ts` `transact`; for a new key, `src/vault.ts` `#prepareKeyRecord` then `#commitKeyRecord`).
 
 | Requirement | Mechanism | Verified by |
 |---|---|---|
 | Multi-record changes are atomic | One transaction per change; a throwing body aborts it | `vault › the first generate writes header and key atomically…` |
-| No lost updates | Readwrite transactions on overlapping stores run one at a time across tabs. `generate` re-reads the header inside its write transaction and adds only if the header is the one it sealed to; otherwise it redoes the whole operation. It tries 3 times in total, then fails with `unavailable`. | `src/vault.ts` `generate`; multi-tab tests not written yet |
-| Concurrent first-time setup converges | The header is added only if absent, inside the write transaction; the loser redoes against the winner's header | `src/vault.ts` `generate`; multi-tab tests not written yet |
+| No lost updates | Readwrite transactions on overlapping stores run one at a time across tabs. `generate` re-reads the header inside its write transaction and adds only if the header is the one it sealed to; otherwise it redoes the whole operation. It tries 3 times in total, then fails with `unavailable`. | `src/vault.ts` `#commitKeyRecord`, `untilUnchanged`; multi-tab tests not written yet |
+| Concurrent first-time setup converges | The header is added only if absent, inside the write transaction; the loser redoes against the winner's header | `src/vault.ts` `#headerForWrite`, `#commitKeyRecord`; multi-tab tests not written yet |
 | A call in flight across `close()` | The connection is taken right before each transaction, after re-checking `close()` | `vault › a call in flight when the vault is closed fails with InvalidStateError…` |
-| A stale context can't undo a wipe | As above: a write sealed to a wiped header fails its check | `src/vault.ts` `generate`; multi-tab tests not written yet |
+| A stale context can't undo a wipe | As above: a write sealed to a wiped header fails its check | `src/vault.ts` `#commitKeyRecord`; multi-tab tests not written yet |
 | Other contexts learn about changes | Not built yet | |
 
 ## 7. Public API
