@@ -8,7 +8,7 @@ Rules for filling:
 - Self-contained: the decision log is not in the repository, so state each decision's outcome and rejected alternatives here, without links or decision IDs.
 -->
 
-Test references: `storage ›` = `test/unit/storage.test.ts`, `vault ›` = `test/unit/vault.test.ts`, `e2e ›` = `test/e2e/demo.spec.ts`. Unit tests run in Chromium, Firefox and WebKit.
+Test references: `storage ›` = `test/unit/storage.test.ts`, `records ›` = `test/unit/records.test.ts`, `vault ›` = `test/unit/vault.test.ts`, `e2e ›` = `test/e2e/demo.spec.ts`. Unit tests run in Chromium, Firefox and WebKit.
 
 ## 1. Overview
 
@@ -134,9 +134,10 @@ Scopes are the first component of the key, so one scope is one key range. Only t
 | Key record fields have their exact types: scope and id strings, a registered type, the public key a `Uint8Array` of the type's length, createdAt a safe non-negative integer, sealed fields `Uint8Array`, a 12-byte IV | `list`, `sign`, without any secret | `corrupted`: `storage › changing a field type…` (6 cases), `› a negative createdAt…`, `› a planted key whose public key has the wrong length…` |
 | Id matches the hash of scope, type and public key | `list`, `sign`, without any secret | `corrupted`: `storage › editing id / type / publicKey…` |
 | Ephemeral key imports as SPKI → AES-GCM decrypt with AAD → sign → verify against the stored public key | `sign` | `corrupted` |
+| Only the fields Vault writes: any other own field on the header, its protection, a key record or its sealed part is rejected | `list`, `generate`, `sign` | `corrupted` ("`<record>: unexpected field <name>`"): `records › an unexpected extra field on …` (4 cases), `› an extra field fails closed through the API…` |
 | A version-1 database has Vault's stores | `open` | `corrupted`: `vault › a database without Vault stores…` |
 
-Vault never repairs: no code path writes back a record it failed to read. A failed check rejects the whole call, so `list()` fails if any key in the scope is bad.
+Each field is read by a typed reader (`src/records.ts`), and the error names the field that failed, e.g. `Corrupted storage: key.sealed.iv`: `records › a malformed header field… / a malformed key record field…` (20 cases). The parsers return new objects built from the read values, never the stored object. Vault never repairs: no code path writes back a record it failed to read. A failed check rejects the whole call, so `list()` fails if any key in the scope is bad.
 
 ### 4.3 Versioning and migration
 
@@ -144,6 +145,8 @@ Vault never repairs: no code path writes back a record it failed to read. A fail
 - A database at a higher schema version fails `open()` with `incompatible`: `storage › a database written by a newer format is rejected with incompatible`. An older build never reads or writes a newer format.
 - A record with `v ≠ 1` inside a version-1 database is `corrupted`, not `incompatible`: a legitimate newer format bumps the schema version first, so no Vault build writes such a record.
 - Open connections close on `versionchange`, so a newer build is never blocked by an old tab. The old tab's next call then fails with `incompatible`: `storage › an open vault never blocks a newer format…`.
+- Format v1 is pinned by regression tests produced by the v1 code: the id and AAD of fixed inputs, and a whole stored key record that must still list and sign (`records › format v1 regression`).
+- Records are parsed strictly (§4.2), so even an optional new field changes the format. It needs a version bump, or, before release, a change to the allow-list.
 - **Migration (not built):** a v2 build opens with schema version 2 and changes structure in the upgrade callback, which is atomic. Re-encryption can't run there, because the callback can't await crypto. So it happens lazily per record, which per-record `v` allows: read a v1 record, re-seal it, write v2 in a normal transaction.
 
 ### 4.4 Eviction and persistent storage
@@ -326,6 +329,7 @@ These WebKit facts come from Playwright's WebKit on Linux. Safari on macOS was n
 | Lifecycle | The vault is created by its first write; wipe empties it for every instance | Eager creation in `open()`; wipe closes every instance | Reads never write; one rule for wipe | "Wiped" and "never used" are the same state |
 | Keys without a header | `corrupted` in `list`, `generate`, `sign`; only `wipe` recovers | Keep listing them; create a fresh header next to them | A fresh header would turn a deleted protected header into an unprotected vault | A writer who deletes only the header makes the vault unusable until `wipe` |
 | Field types | Checked on every read, plus a typed canonical encoding | Leave type checks for later; numbers as `String()` | A type change with the same encoding (`"123"` for `123`, an `Array` for bytes) passed both the id and the AAD | — |
+| Unknown fields | Rejected as `corrupted` (an allow-list per record part) | Ignore them | Vault writes the exact shape, so an extra field is tampering or a foreign format; a newer format already fails on `v`; an ignored field could carry data a later build would trust | No forward-compatible extra fields without a version bump |
 | WebKit's failing Ed25519 key generation | Retry up to 5 times, then `unavailable` | Classify at once and let every caller retry | Generation has no side effects; 5 failures in a row ≈ 10⁻¹¹ | An engine workaround in the key type |
 | WebKit's crashing Ed25519 verify | Documented as not protected | Verify with `@noble/curves`; compare a public key derived via JWK export | A storage writer can already destroy the vault; no new dependency; JWK export would put private key bytes in JS memory on every sign | A tab crash on a planted key in WebKit |
 
@@ -335,6 +339,7 @@ These WebKit facts come from Playwright's WebKit on Linux. Safari on macOS was n
 - **WebKit crashes the tab when signing with a planted key whose public key is degenerate** (§8). Legitimate keys never trigger it, and only someone who can write storage can plant one.
 - **A writer who deletes only the header makes the vault `corrupted` until `wipe()`**, by design (§4.2).
 - **WebKit's Ed25519 key generation fails about 0.7% of the time**; Vault retries it. Not checked in Safari on macOS.
+- **Adding a stored field is a format change** (strict parsing): a build that doesn't know the field reports such records as `corrupted`.
 - **The header is not integrity-protected.** A writer who replaces it with their own wrapping key pair makes existing keys fail at `sign()` (`corrupted`), and gets new keys sealed to their key. `list()` doesn't notice.
 - **One bad record fails all of `list()`** for its scope (fail closed).
 - **An unknown key type is `corrupted`.** A future key type must bump the format version, so older builds see `incompatible` instead.
