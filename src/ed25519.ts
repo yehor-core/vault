@@ -9,14 +9,17 @@ export const ed25519: KeyType = {
   publicKeyLength: 32,
 
   async generate() {
-    const pair = await generateKeyPair();
-    const publicKey = new Uint8Array(await crypto.subtle.exportKey('raw', pair.publicKey));
-    return { publicKey, seal: (cipher) => crypto.subtle.wrapKey('pkcs8', pair.privateKey, cipher.key, cipher.params) };
+    const { publicKey, privateKey } = await generateKeyPair();
+    return {
+      publicKey: new Uint8Array(await crypto.subtle.exportKey('raw', publicKey)),
+      // wrapKey encrypts the private key inside WebCrypto, so its bytes never reach JS.
+      seal: ({ key, params }) => crypto.subtle.wrapKey('pkcs8', privateKey, key, params),
+    };
   },
 
-  async sign(sealed, cipher, data) {
-    const key = await crypto.subtle.unwrapKey('pkcs8', sealed, cipher.key, cipher.params, 'Ed25519', false, ['sign']);
-    return new Uint8Array(await crypto.subtle.sign('Ed25519', key, data));
+  async sign(sealed, { key, params }, data) {
+    const privateKey = await crypto.subtle.unwrapKey('pkcs8', sealed, key, params, 'Ed25519', false, ['sign']);
+    return new Uint8Array(await crypto.subtle.sign('Ed25519', privateKey, data));
   },
 
   async verify(publicKey, signature, data) {
