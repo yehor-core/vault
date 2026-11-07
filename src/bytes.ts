@@ -83,9 +83,7 @@ export function encode(...parts: (string | Bytes | number)[]): Bytes {
 }
 
 export function base64url(bytes: Uint8Array): string {
-  let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
+  return bytes.toBase64({ alphabet: 'base64url', omitPadding: true });
 }
 
 /** Not constant-time: for public values only. */
