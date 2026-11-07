@@ -61,6 +61,19 @@ async function plantKey(name: string, publicKey: Bytes): Promise<string> {
 }
 
 describe('canonical encoding', () => {
+  // Pins the storage format: every key id and AAD is built from these bytes, so they must never change.
+  test('encodes the exact v1 bytes: tag, 4-byte big-endian length, data; integers as 8 bytes big-endian', () => {
+    expect(Array.from(encode('a', new Uint8Array([1, 2]), 258, 'é', Number.MAX_SAFE_INTEGER))).toEqual([
+      ...[1, 0, 0, 0, 1, 0x61],
+      ...[2, 0, 0, 0, 2, 1, 2],
+      ...[3, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 1, 2],
+      ...[1, 0, 0, 0, 2, 0xc3, 0xa9],
+      ...[3, 0, 0, 0, 8, 0x00, 0x1f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
+    ]);
+    expect(Array.from(encode('x'.repeat(300)).subarray(0, 5))).toEqual([1, 0, 0, 0x01, 0x2c]);
+    expect(Array.from(encode())).toEqual([]);
+  });
+
   test("each value keeps its type: 123 and '123' differ, and only Uint8Array counts as bytes", () => {
     expect(encode(123)).not.toEqual(encode('123'));
     expect(encode(new Uint8Array([49, 50, 51]))).not.toEqual(encode('123'));
@@ -169,6 +182,14 @@ describe('integrity', () => {
 
     await expectVaultError(vault.list(), 'corrupted');
     await expectVaultError(vault.sign(key.id, message), 'corrupted');
+  });
+
+  test('a negative createdAt is rejected at list: the canonical encoding has no negative integers', async () => {
+    const { vault, name } = await openVault();
+    const key = await vault.generate('ed25519');
+    await replaceKey(name, key.id, { ...(await readKey(name, key.id)), createdAt: -1 });
+
+    await expectVaultError(vault.list(), 'corrupted');
   });
 
   test('a planted key whose public key has the wrong length is rejected at list', async () => {

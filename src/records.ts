@@ -1,4 +1,4 @@
-import { base64url, encode, isBytes, type Bytes } from './bytes.ts';
+import { base64url, encode, isBytes, isString, isUint, type Bytes } from './bytes.ts';
 import { VaultError } from './errors.ts';
 import { isKeyTypeName, keyTypes, type KeyTypeName } from './key-types.ts';
 import type { Sealed } from './seal.ts';
@@ -49,12 +49,12 @@ export async function parseKeyRecord(value: unknown): Promise<KeyRecord> {
   const sealed = record?.sealed as Partial<Sealed> | undefined;
   if (
     record?.v !== FORMAT_VERSION ||
-    typeof record.scope !== 'string' ||
-    typeof record.id !== 'string' ||
+    !isString(record.scope) ||
+    !isString(record.id) ||
     !isKeyTypeName(record.type) ||
     !isBytes(record.publicKey) ||
     record.publicKey.length !== keyTypes[record.type].publicKeyLength ||
-    !Number.isSafeInteger(record.createdAt) ||
+    !isUint(record.createdAt) ||
     !isBytes(sealed?.ephemeralPublicKey) ||
     !isBytes(sealed.iv) ||
     sealed.iv.length !== 12 ||
