@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { keyAad, keyId } from '../../src/records.ts';
-import { cleanup, openVault, rawRun } from './helpers.ts';
+import { keyAad, keyId, parseHeader, parseKeyRecord } from '../../src/records.ts';
+import { cleanup, expectVaultError, openVault, rawRun, readHeader, readKey, replaceKey, writeHeader } from './helpers.ts';
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -59,5 +59,83 @@ describe('format v1 regression', () => {
     const signature = await vault.sign(r.id, data);
     const publicKey = await crypto.subtle.importKey('raw', bytes(r.publicKey), 'Ed25519', false, ['verify']);
     expect(await crypto.subtle.verify('Ed25519', publicKey, signature.bytes, data)).toBe(true);
+  });
+});
+
+/** A real header and key record, as Vault stored them. */
+async function storedRecords() {
+  const { vault, name } = await openVault();
+  const key = await vault.generate('ed25519');
+  return { vault, name, header: await readHeader(name), record: await readKey(name, key.id) };
+}
+
+async function expectCorruptedMessage(parse: () => unknown, what: string) {
+  const error = await expectVaultError(Promise.resolve().then(parse), 'corrupted');
+  expect(error.message).toBe(`Corrupted storage: ${what}`);
+}
+
+describe('strict parsing', () => {
+  test('the stored header and key record parse as they are', async () => {
+    const { header, record } = await storedRecords();
+    expect(parseHeader(header)).toEqual(header);
+    expect(await parseKeyRecord(record)).toEqual(record);
+  });
+
+  const headerCases: [label: string, what: string, edit: (header: any) => unknown][] = [
+    ['not an object', 'header', () => null],
+    ["v as '1'", 'header.v', (h) => ({ ...h, v: '1' })],
+    ['wrappingPublicKey as a string', 'header.wrappingPublicKey', (h) => ({ ...h, wrappingPublicKey: 'spki' })],
+    ['protection missing', 'header.protection', (h) => ({ ...h, protection: null })],
+    ['unknown protection kind', 'header.protection.kind', (h) => ({ ...h, protection: { ...h.protection, kind: 'passkey' } })],
+    ['root not a CryptoKey', 'header.protection.privateKey', (h) => ({ ...h, protection: { ...h.protection, privateKey: {} } })],
+  ];
+
+  test.each(headerCases)('a malformed header field is corrupted and named: %s', async (_, what, edit) => {
+    const { header } = await storedRecords();
+    await expectCorruptedMessage(() => parseHeader(edit(header)), what);
+  });
+
+  const keyCases: [label: string, what: string, edit: (record: any) => unknown][] = [
+    ['not an object', 'key', () => 'record'],
+    ["v as '1'", 'key.v', (r) => ({ ...r, v: '1' })],
+    ['scope as a number', 'key.scope', (r) => ({ ...r, scope: 1 })],
+    ['id as a number', 'key.id', (r) => ({ ...r, id: 1 })],
+    ['unknown type', 'key.type', (r) => ({ ...r, type: 'secp256k1' })],
+    ['publicKey as an Array', 'key.publicKey', (r) => ({ ...r, publicKey: Array.from(r.publicKey) })],
+    ['publicKey of 31 bytes', 'key.publicKey', (r) => ({ ...r, publicKey: r.publicKey.slice(0, 31) })],
+    ['createdAt as a string', 'key.createdAt', (r) => ({ ...r, createdAt: String(r.createdAt) })],
+    ['createdAt negative', 'key.createdAt', (r) => ({ ...r, createdAt: -1 })],
+    ['sealed missing', 'key.sealed', (r) => ({ ...r, sealed: undefined })],
+    ['ephemeralPublicKey as a string', 'key.sealed.ephemeralPublicKey', (r) => ({ ...r, sealed: { ...r.sealed, ephemeralPublicKey: 'x' } })],
+    ['iv of 11 bytes', 'key.sealed.iv', (r) => ({ ...r, sealed: { ...r.sealed, iv: r.sealed.iv.slice(0, 11) } })],
+    ['ciphertext as an ArrayBuffer', 'key.sealed.ciphertext', (r) => ({ ...r, sealed: { ...r.sealed, ciphertext: r.sealed.ciphertext.buffer } })],
+    ['id of another key', 'key.id does not match its public key', (r) => ({ ...r, id: 'another-id' })],
+  ];
+
+  test.each(keyCases)('a malformed key record field is corrupted and named: %s', async (_, what, edit) => {
+    const { record } = await storedRecords();
+    await expectCorruptedMessage(() => parseKeyRecord(edit(record)), what);
+  });
+
+  const extraFieldCases: [where: string, parse: (header: any, record: any) => unknown][] = [
+    ['header', (h) => parseHeader({ ...h, extra: 1 })],
+    ['header.protection', (h) => parseHeader({ ...h, protection: { ...h.protection, extra: 1 } })],
+    ['key', (_, r) => parseKeyRecord({ ...r, extra: 1 })],
+    ['key.sealed', (_, r) => parseKeyRecord({ ...r, sealed: { ...r.sealed, extra: 1 } })],
+  ];
+
+  test.each(extraFieldCases)('an unexpected extra field on %s is corrupted', async (where, parse) => {
+    const { header, record } = await storedRecords();
+    await expectCorruptedMessage(() => parse(header, record), `${where}: unexpected field extra`);
+  });
+
+  test('an extra field fails closed through the API too, for the header and for a key record', async () => {
+    const { vault, name, header, record } = await storedRecords();
+    await replaceKey(name, record.id, { ...record, label: 'not in format v1' });
+    await expectVaultError(vault.list(), 'corrupted');
+
+    await replaceKey(name, record.id, record);
+    await writeHeader(name, { ...header, extra: 1 });
+    await expectVaultError(vault.list(), 'corrupted');
   });
 });
