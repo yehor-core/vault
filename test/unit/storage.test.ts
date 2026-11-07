@@ -74,6 +74,13 @@ describe('canonical encoding', () => {
     expect(Array.from(encode())).toEqual([]);
   });
 
+  // Key ids are stored, so their text form is part of the format too.
+  test('key ids are base64url without padding (RFC 4648 §5)', () => {
+    expect(base64url(Uint8Array.of(0xfb, 0xff, 0xfe, 0x00, 0x01))).toBe('-__-AAE');
+    expect(base64url(new Uint8Array())).toBe('');
+    expect(base64url(new Uint8Array(32).fill(0xff))).toBe('_'.repeat(42) + '8');
+  });
+
   test("each value keeps its type: 123 and '123' differ, and only Uint8Array counts as bytes", () => {
     expect(encode(123)).not.toEqual(encode('123'));
     expect(encode(new Uint8Array([49, 50, 51]))).not.toEqual(encode('123'));
