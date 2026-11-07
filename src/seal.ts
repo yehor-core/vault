@@ -1,7 +1,7 @@
 import { encode, type Bytes } from './bytes.ts';
 
 // Storage format v1: the IV length and the HKDF label decide whether a stored key opens.
-const IV_LENGTH = 12;
+export const IV_LENGTH = 12;
 const SEAL_LABEL = 'vault/v1/seal';
 const P256: EcKeyImportParams = { name: 'ECDH', namedCurve: 'P-256' };
 
