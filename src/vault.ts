@@ -87,24 +87,9 @@ export class Vault {
   /** Signs `data` with key `id`. The signature verifies under the key's public key, without Vault. */
   async sign(id: string, data: Uint8Array): Promise<Signature> {
     const message: Bytes = new Uint8Array(data); // the caller may change `data` while we await
-    const [header, value] = await this.#transact([META_STORE, KEYS_STORE], 'readonly', async (tx) => [
-      await readHeader(tx),
-      await getKeyRecord(tx, SCOPE, id),
-    ]);
-    if (value === undefined || !header) throw new VaultError('not-found', `No key ${id}`);
-    const record = await parseKeyRecord(value);
-
-    const keyType = keyTypes[record.type];
-    let signature: Bytes;
-    try {
-      const cipher = await unseal(header.protection.privateKey, header.wrappingPublicKey, record.sealed, keyAad(record));
-      signature = await keyType.sign(record.sealed.ciphertext, cipher, message);
-    } catch (cause) {
-      throw corrupted(`key ${id} does not decrypt`, cause);
-    }
-    // Anyone can seal a key of their own to the public wrapping key; it decrypts fine, and only this check catches it.
-    const valid = await keyType.verify(record.publicKey, signature, message).catch(() => false);
-    if (!valid) throw corrupted(`key ${id} does not match its public key`);
+    const { header, record } = await this.#loadKey(id);
+    const signature = await signWithRecord(header, record, message);
+    await assertSignatureMatches(record, signature, message);
     return { type: record.type, bytes: signature };
   }
 
@@ -145,6 +130,18 @@ export class Vault {
       });
     }
     return this.#db;
+  }
+
+  /** The header and the parsed record of key `id`, read in one transaction. */
+  async #loadKey(id: string): Promise<{ header: HeaderRecord; record: KeyRecord }> {
+    const { header, value } = await this.#transact([META_STORE, KEYS_STORE], 'readonly', async (tx) => {
+      const header = await readHeader(tx);
+      const value = await getKeyRecord(tx, SCOPE, id);
+      return { header, value };
+    });
+    if (value === undefined || !header) throw new VaultError('not-found', `No key ${id}`);
+    const record = await parseKeyRecord(value);
+    return { header, record };
   }
 
   /**
@@ -193,6 +190,22 @@ export class Vault {
       throw cause instanceof DOMException && cause.name === 'DataError' ? corrupted('wrapping public key', cause) : cause;
     });
   }
+}
+
+/** Decrypts the key and signs; any failure means the stored key is not what Vault sealed. */
+async function signWithRecord(header: HeaderRecord, record: KeyRecord, message: Bytes): Promise<Bytes> {
+  try {
+    const cipher = await unseal(header.protection.privateKey, header.wrappingPublicKey, record.sealed, keyAad(record));
+    return await keyTypes[record.type].sign(record.sealed.ciphertext, cipher, message); // await: so catch sees it
+  } catch (cause) {
+    throw corrupted(`key ${record.id} does not decrypt`, cause);
+  }
+}
+
+// Anyone can seal a key of their own to the public wrapping key; it decrypts fine, and only this check catches it.
+async function assertSignatureMatches(record: KeyRecord, signature: Bytes, message: Bytes): Promise<void> {
+  const valid = await keyTypes[record.type].verify(record.publicKey, signature, message).catch(() => false);
+  if (!valid) throw corrupted(`key ${record.id} does not match its public key`);
 }
 
 /** Optimistic write: runs `attempt` up to `times` times until it returns a value (undefined = vault changed). */
