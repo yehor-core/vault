@@ -40,7 +40,7 @@ const signature = await vault.sign(key.id, new TextEncoder().encode('hello'));
 | Firefox | 157 | ✓ | ✓ | not built yet |
 | WebKit | 27.2 | ✓ | ✓ | not built yet |
 
-Needs WebCrypto Ed25519, ECDH P-256, HKDF and AES-GCM, plus IndexedDB, in a secure context. WebKit (Playwright, Linux) has four quirks that shape the design; see DESIGN.md §8:
+Needs WebCrypto Ed25519, ECDH P-256, HKDF and AES-GCM, IndexedDB and `Uint8Array.prototype.toBase64` (ES2026), in a secure context. WebKit (Playwright, Linux) has four quirks that shape the design; see DESIGN.md §8:
 - It loses stored X25519 keys.
 - Its point import accepts off-curve points.
 - Its Ed25519 key generation fails about 0.7% of the time (Vault retries it).
@@ -62,6 +62,7 @@ Unit tests: `test/unit/vault.test.ts` (vault ›) and `test/unit/storage.test.ts
 | A field whose type changes but whose value doesn't (`"123"` for `123`, an `Array` or `Int8Array` for bytes) fails closed at `list()` | storage › integrity › changing a field type without changing its value fails closed at list: … (6 cases) | Chromium, Firefox, WebKit |
 | The canonical encoding keeps types and boundaries (`123` ≠ `"123"`, only `Uint8Array` counts as bytes) | storage › canonical encoding › each value keeps its type… | Chromium, Firefox, WebKit |
 | The encoding's exact v1 bytes are pinned (tags 1/2/3, 4-byte big-endian length, 8-byte big-endian integers), so a refactor can't silently change every stored id and AAD | storage › canonical encoding › encodes the exact v1 bytes… | Chromium, Firefox, WebKit |
+| Key ids are base64url without padding: their stored text form can't change silently | storage › canonical encoding › key ids are base64url without padding (RFC 4648 §5) | Chromium, Firefox, WebKit |
 | A negative `createdAt` fails closed at `list()` | storage › integrity › a negative createdAt is rejected at list… | Chromium, Firefox, WebKit |
 | A planted key with a wrong-length public key fails closed at `list()` | storage › integrity › a planted key whose public key has the wrong length is rejected at list | Chromium, Firefox, WebKit |
 | A planted key with a degenerate public key fails closed at `sign()` | storage › integrity › a planted key with a degenerate public key is listed like any added key, and sign fails closed | Chromium, Firefox (skipped in WebKit, where verify crashes the tab: not protected) |
