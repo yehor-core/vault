@@ -64,41 +64,14 @@ export class Vault {
   /** Generates a key inside the vault. Never prompts. */
   async generate(type: KeyTypeName): Promise<KeyInfo> {
     if (!isKeyTypeName(type)) throw new TypeError(`Unknown key type: ${String(type)}`);
-    const keyType = keyTypes[type];
-    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-      const stored = await this.#transact([META_STORE, KEYS_STORE], 'readonly', readHeader);
-      // The vault is created by its first write; a concurrent first write elsewhere wins and we redo.
-      const created = stored ? undefined : await createHeader();
-      const header = (stored ?? created)!;
-
-      const pair = await keyType.generate().catch((cause: unknown) => {
-        throw new VaultError('unavailable', 'The browser failed to generate a key', { cause });
-      });
-      const fields: KeyFields = {
-        v: FORMAT_VERSION,
-        scope: SCOPE,
-        id: await keyId(SCOPE, type, pair.publicKey),
-        type,
-        publicKey: pair.publicKey,
-        createdAt: Date.now(),
-      };
-      const record: KeyRecord = { ...fields, sealed: await this.#seal(header, fields, pair.seal) };
-
-      // Crypto is done; the transaction only checks that the header is still the one we sealed to.
-      const written = await this.#transact([META_STORE, KEYS_STORE], 'readwrite', async (tx) => {
-        const current = await readHeader(tx);
-        if (!current) {
-          if (!created) return false; // wiped since we read it
-          addHeader(tx, created);
-        } else if (!equalBytes(current.wrappingPublicKey, header.wrappingPublicKey)) {
-          return false; // replaced since we read it
-        }
-        addKeyRecord(tx, record);
-        return true;
-      });
-      if (written) return keyInfo(record);
-    }
-    throw new VaultError('unavailable', 'The vault kept changing during generate');
+    const record = await untilUnchanged(MAX_ATTEMPTS, async () => {
+      const { header, isNew } = await this.#headerForWrite();
+      const record = await this.#prepareKeyRecord(type, header);
+      const written = await this.#commitKeyRecord(record, header, isNew);
+      return written ? record : undefined;
+    });
+    if (!record) throw new VaultError('unavailable', 'The vault kept changing during generate');
+    return keyInfo(record);
   }
 
   /** All keys, oldest first (keys created in the same millisecond: by id). Never prompts. */
@@ -174,12 +147,61 @@ export class Vault {
     return this.#db;
   }
 
+  /**
+   * The stored header, or a fresh one when the vault is empty. The vault is created by its first write,
+   * in #commitKeyRecord; a concurrent first write elsewhere wins and we redo.
+   */
+  async #headerForWrite(): Promise<{ header: HeaderRecord; isNew: boolean }> {
+    const stored = await this.#transact([META_STORE, KEYS_STORE], 'readonly', readHeader);
+    if (stored) return { header: stored, isNew: false };
+    const created = await createHeader();
+    return { header: created, isNew: true };
+  }
+
+  /** All crypto for a new key: generate, derive the id, seal. Outside any transaction: crypto would end it. */
+  async #prepareKeyRecord(type: KeyTypeName, header: HeaderRecord): Promise<KeyRecord> {
+    const pair = await keyTypes[type].generate().catch((cause: unknown) => {
+      throw new VaultError('unavailable', 'The browser failed to generate a key', { cause });
+    });
+    const id = await keyId(SCOPE, type, pair.publicKey);
+    const fields: KeyFields = { v: FORMAT_VERSION, scope: SCOPE, id, type, publicKey: pair.publicKey, createdAt: Date.now() };
+    const sealed = await this.#seal(header, fields, pair.seal);
+    return { ...fields, sealed };
+  }
+
+  /**
+   * Crypto is done; the transaction only checks that the header is still the one we sealed to, then
+   * writes. False means the vault was wiped or its header replaced since we read it.
+   */
+  async #commitKeyRecord(record: KeyRecord, header: HeaderRecord, isNew: boolean): Promise<boolean> {
+    return this.#transact([META_STORE, KEYS_STORE], 'readwrite', async (tx) => {
+      const current = await readHeader(tx);
+      if (!current) {
+        if (!isNew) return false; // wiped since we read it
+        addHeader(tx, header);
+      } else if (!equalBytes(current.wrappingPublicKey, header.wrappingPublicKey)) {
+        return false; // replaced since we read it (or another first write won)
+      }
+      addKeyRecord(tx, record);
+      return true;
+    });
+  }
+
   async #seal(header: HeaderRecord, fields: KeyFields, encrypt: Parameters<typeof seal>[2]) {
     return seal(header.wrappingPublicKey, keyAad(fields), encrypt).catch((cause: unknown) => {
       // The only stored input is the wrapping public key; a fresh one always imports.
       throw cause instanceof DOMException && cause.name === 'DataError' ? corrupted('wrapping public key', cause) : cause;
     });
   }
+}
+
+/** Optimistic write: runs `attempt` up to `times` times until it returns a value (undefined = vault changed). */
+async function untilUnchanged<T>(times: number, attempt: () => Promise<T | undefined>): Promise<T | undefined> {
+  for (let i = 0; i < times; i++) {
+    const result = await attempt();
+    if (result !== undefined) return result;
+  }
+  return undefined;
 }
 
 function closedError(): DOMException {
