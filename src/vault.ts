@@ -1,5 +1,5 @@
 import { equalBytes, type Bytes } from './bytes.ts';
-import { openDatabase, request, transact, type Store } from './db.ts';
+import { openDatabase, transact, type Store } from './db.ts';
 import { VaultError } from './errors.ts';
 import { isKeyTypeName, keyTypes, type KeyTypeName } from './key-types.ts';
 import {
@@ -7,13 +7,23 @@ import {
   FORMAT_VERSION,
   keyAad,
   keyId,
-  parseHeader,
   parseKeyRecord,
   type HeaderRecord,
   type KeyFields,
   type KeyRecord,
 } from './records.ts';
 import { generateWrappingKey, seal, unseal } from './seal.ts';
+import {
+  addHeader,
+  addKeyRecord,
+  clearAll,
+  deleteKeyRecord,
+  getKeyRecord,
+  KEYS_STORE,
+  listKeyRecords,
+  META_STORE,
+  readHeader,
+} from './storage.ts';
 
 const SCOPE = 'default';
 const MAX_ATTEMPTS = 3;
@@ -56,7 +66,7 @@ export class Vault {
     if (!isKeyTypeName(type)) throw new TypeError(`Unknown key type: ${String(type)}`);
     const keyType = keyTypes[type];
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-      const stored = await this.#transact(['meta', 'keys'], 'readonly', readHeader);
+      const stored = await this.#transact([META_STORE, KEYS_STORE], 'readonly', readHeader);
       // The vault is created by its first write; a concurrent first write elsewhere wins and we redo.
       const created = stored ? undefined : await createHeader();
       const header = (stored ?? created)!;
@@ -75,15 +85,15 @@ export class Vault {
       const record: KeyRecord = { ...fields, sealed: await this.#seal(header, fields, pair.seal) };
 
       // Crypto is done; the transaction only checks that the header is still the one we sealed to.
-      const written = await this.#transact(['meta', 'keys'], 'readwrite', async (tx) => {
+      const written = await this.#transact([META_STORE, KEYS_STORE], 'readwrite', async (tx) => {
         const current = await readHeader(tx);
         if (!current) {
           if (!created) return false; // wiped since we read it
-          tx.objectStore('meta').add(created, 'header');
+          addHeader(tx, created);
         } else if (!equalBytes(current.wrappingPublicKey, header.wrappingPublicKey)) {
           return false; // replaced since we read it
         }
-        tx.objectStore('keys').add(record);
+        addKeyRecord(tx, record);
         return true;
       });
       if (written) return keyInfo(record);
@@ -93,9 +103,9 @@ export class Vault {
 
   /** All keys, oldest first (keys created in the same millisecond: by id). Never prompts. */
   async list(): Promise<KeyInfo[]> {
-    const values = await this.#transact(['meta', 'keys'], 'readonly', async (tx) => {
-      await readHeader(tx);
-      return request(tx.objectStore('keys').getAll(IDBKeyRange.bound([SCOPE], [SCOPE, []])));
+    const values = await this.#transact([META_STORE, KEYS_STORE], 'readonly', async (tx) => {
+      await readHeader(tx); // rejects a malformed header and keys without one
+      return listKeyRecords(tx, SCOPE);
     });
     const records = await Promise.all(values.map(parseKeyRecord));
     return records.sort((a, b) => a.createdAt - b.createdAt).map(keyInfo);
@@ -104,9 +114,9 @@ export class Vault {
   /** Signs `data` with key `id`. The signature verifies under the key's public key, without Vault. */
   async sign(id: string, data: Uint8Array): Promise<Signature> {
     const message: Bytes = new Uint8Array(data); // the caller may change `data` while we await
-    const [header, value] = await this.#transact(['meta', 'keys'], 'readonly', async (tx) => [
+    const [header, value] = await this.#transact([META_STORE, KEYS_STORE], 'readonly', async (tx) => [
       await readHeader(tx),
-      await request(tx.objectStore('keys').get([SCOPE, id])),
+      await getKeyRecord(tx, SCOPE, id),
     ]);
     if (value === undefined || !header) throw new VaultError('not-found', `No key ${id}`);
     const record = await parseKeyRecord(value);
@@ -127,17 +137,12 @@ export class Vault {
 
   /** Deletes key `id`. Deleting a missing key is a no-op. */
   async delete(id: string): Promise<void> {
-    await this.#transact(['keys'], 'readwrite', async (tx) => {
-      tx.objectStore('keys').delete([SCOPE, id]);
-    });
+    await this.#transact([KEYS_STORE], 'readwrite', async (tx) => deleteKeyRecord(tx, SCOPE, id));
   }
 
   /** Deletes every key and the vault itself, atomically. The vault is then empty, as if never used. */
   async wipe(): Promise<void> {
-    await this.#transact(['meta', 'keys'], 'readwrite', async (tx) => {
-      tx.objectStore('meta').clear();
-      tx.objectStore('keys').clear();
-    });
+    await this.#transact([META_STORE, KEYS_STORE], 'readwrite', async (tx) => clearAll(tx));
   }
 
   /** Releases the database connection. Every later call, and every call still in flight, throws. */
@@ -175,19 +180,6 @@ export class Vault {
       throw cause instanceof DOMException && cause.name === 'DataError' ? corrupted('wrapping public key', cause) : cause;
     });
   }
-}
-
-/**
- * The header, or undefined for an empty vault. Key records without a header mean the header was
- * deleted, never that the vault is new: no legitimate write leaves one without the other.
- */
-async function readHeader(tx: IDBTransaction): Promise<HeaderRecord | undefined> {
-  const meta = tx.objectStore('meta');
-  // count, not get: a header stored as `undefined` is present and malformed, not absent.
-  const [present, value] = await Promise.all([request(meta.count('header')), request(meta.get('header'))]);
-  if (present) return parseHeader(value);
-  if (await request(tx.objectStore('keys').count())) throw corrupted('key records exist without a vault header');
-  return undefined;
 }
 
 function closedError(): DOMException {
