@@ -111,6 +111,29 @@ describe('encryption at rest', () => {
     expect(cryptoKeys[0]).toMatchObject({ type: 'private', extractable: false, usages: ['deriveKey'] });
   });
 
+  test('a value sealed by format v1 still opens: key derivation and cipher parameters are pinned', async () => {
+    // Sealed once by the v1 code (in Node) to a test-only recipient key. A change that alters seal and unseal
+    // alike (HKDF info, label, salt, IV handling) passes every round trip but fails here.
+    const v1 = {
+      recipientPkcs8:
+        '308187020100301306072a8648ce3d020106082a8648ce3d030107046d306b02010104201edb0959d969d7e98f5d46eb5de08192450b9ecbfa7dc0dd9a0c0b8d3f2cb87aa14403420004f2cd0725ba43ce6c4f05c83a9b8b5419cbf8bd34d15525dfb6d61580fd9e61ef90a50d9f1d15a81545bca1302da58bac232b8534b4913f15b40604d52b8af998',
+      recipientSpki:
+        '3059301306072a8648ce3d020106082a8648ce3d03010703420004f2cd0725ba43ce6c4f05c83a9b8b5419cbf8bd34d15525dfb6d61580fd9e61ef90a50d9f1d15a81545bca1302da58bac232b8534b4913f15b40604d52b8af998',
+      aad: '010000000c7661756c742f76312f6b657903000000080000000000000001010000000764656661756c74010000000766697874757265',
+      ephemeralPublicKey:
+        '3059301306072a8648ce3d020106082a8648ce3d0301070342000497a722e580798159a265c5a21f4e3abdf929dbc3fd8e02dd127ceeeb07d2140d5f74fb7a3ff1314b7304a9e4f29acc6ae45d32c8da219b61aeaa920ca45193b5',
+      iv: '29eb6d32a598be903eadc202',
+      ciphertext: 'd55d737b56c3fa8ce5073edb26d288004d5391c63cbd8396372c973b2407e084d870fbe312c65fc813bc',
+    };
+    const bytes = (hex: string) => Uint8Array.fromHex(hex);
+    const privateKey = await crypto.subtle.importKey('pkcs8', bytes(v1.recipientPkcs8), { name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveKey']);
+    const sealed = { ephemeralPublicKey: bytes(v1.ephemeralPublicKey), iv: bytes(v1.iv), ciphertext: bytes(v1.ciphertext) };
+
+    const cipher = await unseal(privateKey, bytes(v1.recipientSpki), sealed, bytes(v1.aad));
+    const plaintext = await crypto.subtle.decrypt(cipher.params, cipher.key, sealed.ciphertext);
+    expect(new TextDecoder().decode(plaintext)).toBe('vault v1 seal known answer');
+  });
+
   test('decrypting needs the root key: with another private key in its place, sign fails closed', async () => {
     const { vault, name } = await openVault();
     const key = await vault.generate('ed25519');
