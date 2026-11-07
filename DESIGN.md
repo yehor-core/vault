@@ -109,7 +109,7 @@ What Vault stores about a passkey key and what it can do without that record.
 | Key ids | SHA-256 | WebCrypto | Native |
 | Randomness | `getRandomValues`, `generateKey` | WebCrypto | Native |
 
-There are no third-party cryptographic dependencies yet. The sealing construction (`src/seal.ts`) composes native primitives in the shape of HPKE base mode: a one-time key per seal, both public keys in the KDF context, and AEAD with associated data. It is not wire-compatible with HPKE.
+There are no third-party cryptographic dependencies yet. The sealing construction (`src/seal.ts`) composes native primitives in the shape of HPKE base mode: a one-time key per seal, both public keys in the KDF context, and AEAD with associated data. It is not wire-compatible with HPKE. A value sealed by the v1 code is kept as a known-answer test, `storage › a value sealed by format v1 still opens…`. Any change to the derivation fails that test, even when it alters `seal` and `unseal` alike and every round trip still passes.
 
 ## 4. Storage layout
 
