@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
+import { Vault } from '../../src/index.ts';
 import { keyAad, keyId, parseHeader, parseKeyRecord } from '../../src/records.ts';
-import { cleanup, expectVaultError, openVault, rawRun, readHeader, readKey, replaceKey, writeHeader } from './helpers.ts';
+import { cleanup, done, expectVaultError, openVault, rawRun, readHeader, readKey, replaceKey, writeHeader } from './helpers.ts';
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -32,6 +33,19 @@ const V1 = {
 
 describe('format v1 regression', () => {
   const fixedPublicKey = Uint8Array.from({ length: 32 }, (_, i) => i);
+
+  // The database name is part of the format: renaming the default would hide every existing user's keys.
+  test("the default database name is 'vault'", async () => {
+    const vault = await Vault.open();
+    try {
+      const key = await vault.generate('ed25519');
+      const stored = await rawRun<any>('vault', ['keys'], (tx) => tx.objectStore('keys').get(['default', key.id]));
+      expect(stored?.id).toBe(key.id);
+    } finally {
+      vault.close();
+      await done(indexedDB.deleteDatabase('vault'));
+    }
+  });
 
   test('keyId of a fixed input is unchanged', async () => {
     expect(await keyId('default', 'ed25519', fixedPublicKey)).toBe(V1.keyId);
@@ -101,13 +115,18 @@ describe('strict parsing', () => {
     ['scope as a number', 'key.scope', (r) => ({ ...r, scope: 1 })],
     ['id as a number', 'key.id', (r) => ({ ...r, id: 1 })],
     ['unknown type', 'key.type', (r) => ({ ...r, type: 'secp256k1' })],
+    ["type 'constructor' (inherited, not registered)", 'key.type', (r) => ({ ...r, type: 'constructor' })],
+    ["type '__proto__'", 'key.type', (r) => ({ ...r, type: '__proto__' })],
+    ["type 'toString'", 'key.type', (r) => ({ ...r, type: 'toString' })],
     ['publicKey as an Array', 'key.publicKey', (r) => ({ ...r, publicKey: Array.from(r.publicKey) })],
     ['publicKey of 31 bytes', 'key.publicKey', (r) => ({ ...r, publicKey: r.publicKey.slice(0, 31) })],
+    ['publicKey of 33 bytes', 'key.publicKey', (r) => ({ ...r, publicKey: Uint8Array.of(...r.publicKey, 0) })],
     ['createdAt as a string', 'key.createdAt', (r) => ({ ...r, createdAt: String(r.createdAt) })],
     ['createdAt negative', 'key.createdAt', (r) => ({ ...r, createdAt: -1 })],
     ['sealed missing', 'key.sealed', (r) => ({ ...r, sealed: undefined })],
     ['ephemeralPublicKey as a string', 'key.sealed.ephemeralPublicKey', (r) => ({ ...r, sealed: { ...r.sealed, ephemeralPublicKey: 'x' } })],
     ['iv of 11 bytes', 'key.sealed.iv', (r) => ({ ...r, sealed: { ...r.sealed, iv: r.sealed.iv.slice(0, 11) } })],
+    ['iv of 13 bytes', 'key.sealed.iv', (r) => ({ ...r, sealed: { ...r.sealed, iv: Uint8Array.of(...r.sealed.iv, 0) } })],
     ['ciphertext as an ArrayBuffer', 'key.sealed.ciphertext', (r) => ({ ...r, sealed: { ...r.sealed, ciphertext: r.sealed.ciphertext.buffer } })],
     ['id of another key', 'key.id does not match its public key', (r) => ({ ...r, id: 'another-id' })],
   ];
