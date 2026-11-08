@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
+import { ed25519 } from '../../src/ed25519.ts';
 import { Vault } from '../../src/index.ts';
 import {
   cleanup,
@@ -122,9 +123,19 @@ describe('lifecycle', () => {
 
   test('a closed vault rejects every call', async () => {
     const { vault } = await openVault();
+    const key = await vault.generate('ed25519');
     vault.close();
-    await expect(vault.list()).rejects.toMatchObject({ name: 'InvalidStateError' });
-    await expect(vault.generate('ed25519')).rejects.toMatchObject({ name: 'InvalidStateError' });
+    const calls = [vault.generate('ed25519'), vault.list(), vault.sign(key.id, message), vault.delete(key.id), vault.wipe()];
+    for (const call of calls) await expect(call).rejects.toMatchObject({ name: 'InvalidStateError' });
+  });
+
+  test('sign rejects data that is not a Uint8Array instead of signing something else', async () => {
+    const { vault } = await openVault();
+    const key = await vault.generate('ed25519');
+    // new Uint8Array('hello') is empty: coercing would sign the empty message and report success.
+    for (const data of ['hello', [1, 2, 3], new ArrayBuffer(4), new DataView(new ArrayBuffer(4))]) {
+      await expect(vault.sign(key.id, data as never)).rejects.toThrow(new TypeError('data must be a Uint8Array'));
+    }
   });
 
   test('a call in flight when the vault is closed fails with InvalidStateError, not a retryable error', async () => {
@@ -164,6 +175,34 @@ describe('errors', () => {
 
     await expectVaultError(vault.generate('ed25519'), 'unavailable');
     expect(await readAll(name)).toEqual({ meta: [], keys: [] });
+  });
+
+  test('a write that aborts at commit, after its body returned, fails as unavailable and stores nothing', async () => {
+    const { vault } = await openVault();
+    // The same key pair twice gives the same id, so the second add fails asynchronously with ConstraintError.
+    const pair = await ed25519.generate();
+    vi.spyOn(ed25519, 'generate').mockResolvedValue(pair);
+    const first = await vault.generate('ed25519');
+
+    const error = await expectVaultError(vault.generate('ed25519'), 'unavailable');
+    expect(error.cause).toMatchObject({ name: 'ConstraintError' });
+    expect(await vault.list()).toEqual([first]);
+  });
+
+  test('wipe is one transaction: aborted midway, it fails as unavailable and the header and keys remain', async () => {
+    const { vault, name } = await openVault();
+    const key = await vault.generate('ed25519');
+    const before = await readAll(name);
+    const clear = IDBObjectStore.prototype.clear;
+    vi.spyOn(IDBObjectStore.prototype, 'clear').mockImplementation(function (this: IDBObjectStore) {
+      const request = clear.call(this);
+      if (this.name === 'keys') this.transaction.abort(); // the header is already cleared in this transaction
+      return request;
+    });
+
+    await expectVaultError(vault.wipe(), 'unavailable');
+    expect(await readAll(name)).toEqual(before);
+    expect(await vault.list()).toEqual([key]);
   });
 
   test('key records without a vault header are corrupted everywhere, never a new vault; only wipe recovers', async () => {
@@ -207,7 +246,7 @@ describe('errors', () => {
         ? Promise.reject(new DOMException('simulated engine failure', 'OperationError'))
         : generateKey(algorithm, ...rest)) as never);
 
-    failures = 4;
+    failures = 2; // not 4: the remaining real attempts must absorb WebKit's own ~0.7% failure rate
     await expect(vault.generate('ed25519')).resolves.toMatchObject({ type: 'ed25519' });
     failures = 5;
     const error = await expectVaultError(vault.generate('ed25519'), 'unavailable');

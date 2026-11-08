@@ -85,7 +85,9 @@ describe('canonical encoding', () => {
     expect(encode(123)).not.toEqual(encode('123'));
     expect(encode(new Uint8Array([49, 50, 51]))).not.toEqual(encode('123'));
     expect(encode('a', 'bc')).not.toEqual(encode('ab', 'c'));
-    for (const value of [[1, 2, 3], new Int8Array([1]), new Uint8Array([1]).buffer, -1, 1.5, NaN, null]) {
+    // 2 ** 64 matters most: written as 8 bytes it would wrap around and encode exactly like 0.
+    const rejected = [[1, 2, 3], new Int8Array([1]), new Uint8Array([1]).buffer, -1, 1.5, NaN, null, 2 ** 53, 2 ** 64, Infinity];
+    for (const value of rejected) {
       expect(() => encode(value as never)).toThrow(TypeError);
     }
   });
@@ -279,6 +281,16 @@ describe('integrity', () => {
     await expectVaultError(vault.sign(key.id, message), 'corrupted');
   });
 
+  test('a tampered wrapping public key makes generate fail closed, not with a raw DataError', async () => {
+    const { vault, name } = await openVault();
+    await vault.generate('ed25519');
+    const header = await readHeader(name);
+    await writeHeader(name, { ...header, wrappingPublicKey: flipBit(header.wrappingPublicKey) });
+
+    const error = await expectVaultError(vault.generate('ed25519'), 'corrupted');
+    expect(error.cause).toMatchObject({ name: 'DataError' });
+  });
+
   test('an off-curve ephemeral public key is rejected on import, in every engine', async () => {
     const { publicKey } = await generateWrappingKey();
     await expect(importPublicKey(publicKey)).resolves.toBeInstanceOf(CryptoKey);
@@ -296,7 +308,9 @@ describe('integrity', () => {
 });
 
 describe('format versioning', () => {
-  test.each([2, '1', true, undefined])('a header with format version %s is rejected, not coerced', async (v) => {
+  const versions: [label: string, v: unknown][] = [['2', 2], ["'1' (a string)", '1'], ['true', true], ['missing', undefined]];
+
+  test.each(versions)('a header with format version %s is rejected, not coerced', async (_, v) => {
     const { vault, name } = await openVault();
     const key = await vault.generate('ed25519');
     await writeHeader(name, { ...(await readHeader(name)), v });
