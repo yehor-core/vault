@@ -86,6 +86,8 @@ export class Vault {
 
   /** Signs `data` with key `id`. The signature verifies under the key's public key, without Vault. */
   async sign(id: string, data: Uint8Array): Promise<Signature> {
+    // Checked, not coerced: new Uint8Array('hello') is empty, so a string would be signed as the empty message.
+    if (!(data instanceof Uint8Array)) throw new TypeError('data must be a Uint8Array');
     const message: Bytes = new Uint8Array(data); // the caller may change `data` while we await
     const { header, record } = await this.#loadKey(id);
     const signature = await signWithRecord(header, record, message);
