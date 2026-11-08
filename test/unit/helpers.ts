@@ -30,7 +30,7 @@ export async function expectVaultError(promise: Promise<unknown>, code: VaultErr
     (e: unknown) => e,
   );
   expect(error).toBeInstanceOf(VaultError);
-  expect(error).toMatchObject({ code });
+  expect(error).toMatchObject({ code, retryable: code === 'unavailable' }); // only infrastructure faults are worth retrying
   return error as VaultError;
 }
 
