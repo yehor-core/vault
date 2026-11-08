@@ -4,6 +4,9 @@
 
 node_modules/
 
+# Library build output (npm run build)
+dist/
+
 # Test artifacts (Playwright results, Vitest failure screenshots)
 test-results/
 .vitest/
