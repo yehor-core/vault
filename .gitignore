@@ -1,7 +1,3 @@
-# Documentation and agent settings
-# Leading "/" anchors to the repo root; git has no "./" form, so "./docs" matched nothing.
-/docs/
-
 node_modules/
 
 # Library build output (npm run build)
