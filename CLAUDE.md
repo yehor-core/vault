@@ -22,6 +22,7 @@ Roadmap → slice → spec → tickets → one PR per ticket. I start each step.
 ## Git
 - One ticket = one branch = one PR. Before `/implement`, create `S<N>/<NN>-<short-name>` from an up-to-date `main`.
 - Commit messages reference the ticket (`Refs #<issue>`), so `/code-review` finds the spec.
+- In a new worktree, run `npx husky` once before the first commit: it creates the git-ignored `.husky/_` that runs the pre-commit hook (D-26).
 - When the ticket is done: push, then `gh pr create`. Title `S<N>-<NN>: <ticket title>`. Body: `Closes #<issue>`, the decision IDs made, the `/code-review` summary, the test summary output.
 
 ## Ticket done means
