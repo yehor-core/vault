@@ -11,8 +11,12 @@ const utf8 = new TextEncoder();
 
 // Type guards: what is this value? They never throw.
 
+/**
+ * A well-formed string. UTF-8 can't carry a lone surrogate (TextEncoder writes U+FFFD instead), so 'x\uD800'
+ * and 'x�' would encode alike and share a key id and AAD while IndexedDB keeps them apart.
+ */
 export function isString(value: unknown): value is string {
-  return typeof value === 'string';
+  return typeof value === 'string' && value.isWellFormed();
 }
 
 /** A byte field as Vault stores it; anything else read from storage is malformed. */

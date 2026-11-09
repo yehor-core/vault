@@ -1,12 +1,14 @@
 import { base64url, encode, isBytes, isString, isUint, type Bytes } from './bytes.ts';
 import { VaultError } from './errors.ts';
-import { isKeyTypeName, keyTypes, type KeyTypeName } from './key-types.ts';
+import { isKeyTypeName, isTypeNameForm, keyTypes, type KeyTypeName } from './key-types.ts';
 import { IV_LENGTH, type Sealed } from './seal.ts';
 
 /** Storage format version, and also the IndexedDB schema version: a newer format always bumps both. */
 export const FORMAT_VERSION = 1;
 const LABEL_KEY_ID = 'vault/v1/key-id';
 const LABEL_KEY_AAD = 'vault/v1/key';
+const MAX_SCOPE_LENGTH = 1024; // UTF-16 code units: room for any origin, which an embedding may use as a scope
+const MAX_LABEL_LENGTH = 256;
 
 /** The single `meta/header` record: the wrapping key pair every private key is sealed to. */
 export interface HeaderRecord {
@@ -26,6 +28,8 @@ export interface KeyRecord {
   readonly publicKey: Bytes;
   /** Milliseconds since the epoch. */
   readonly createdAt: number;
+  /** Absent, never undefined, when the caller gave none. */
+  readonly label?: string;
   readonly sealed: Sealed;
 }
 
@@ -63,8 +67,27 @@ function readUint(value: unknown, name: string): number {
 }
 
 function readKeyType(value: unknown, name: string): KeyTypeName {
-  if (!isKeyTypeName(value)) throw corrupted(name);
+  if (isKeyTypeName(value)) return value;
+  if (isTypeNameForm(value)) {
+    throw new VaultError('incompatible', `Storage holds a key of type ${value}, which this build does not know`);
+  }
+  throw corrupted(name);
+}
+
+function readScope(value: unknown, name: string): string {
+  if (!isScopeName(value)) throw corrupted(name);
   return value;
+}
+
+function readLabel(value: unknown, name: string): string {
+  if (!isLabel(value)) throw corrupted(name);
+  return value;
+}
+
+function readPublicKey(value: unknown, type: KeyTypeName, name: string): Bytes {
+  const publicKey = readBytes(value, name);
+  if (!keyTypes[type].isValidPublicKey(publicKey)) throw corrupted(name);
+  return publicKey;
 }
 
 function readCryptoKey(value: unknown, name: string): CryptoKey {
@@ -113,15 +136,18 @@ function parseSealed(value: unknown): Sealed {
 function parseKeyShape(value: unknown): KeyRecord {
   const key = readObject(value, 'key');
   const v = readVersion(key.v, 'key.v');
-  assertOnlyFields(key, 'key', ['v', 'scope', 'id', 'type', 'publicKey', 'createdAt', 'sealed']);
+  // Before the field list: a key type from a newer build may bring fields this build doesn't know.
   const type = readKeyType(key.type, 'key.type');
+  assertOnlyFields(key, 'key', ['v', 'scope', 'id', 'type', 'publicKey', 'createdAt', 'label', 'sealed']);
   return {
     v,
-    scope: readString(key.scope, 'key.scope'),
+    scope: readScope(key.scope, 'key.scope'),
     id: readString(key.id, 'key.id'),
     type,
-    publicKey: readBytes(key.publicKey, 'key.publicKey', keyTypes[type].publicKeyLength),
+    publicKey: readPublicKey(key.publicKey, type, 'key.publicKey'),
     createdAt: readUint(key.createdAt, 'key.createdAt'),
+    // hasOwn, not `!== undefined`: Vault never stores `label: undefined`, so such a field is malformed.
+    ...(Object.hasOwn(key, 'label') ? { label: readLabel(key.label, 'key.label') } : {}),
     sealed: parseSealed(key.sealed),
   };
 }
@@ -146,8 +172,20 @@ export async function keyId(scope: string, type: KeyTypeName, publicKey: Bytes):
 
 /** AES-GCM associated data: every stored field except the ciphertext itself, so any edit fails decryption. */
 export function keyAad(fields: KeyFields): Bytes {
-  const { v, scope, id, type, publicKey, createdAt } = fields;
-  return encode(LABEL_KEY_AAD, v, scope, id, type, publicKey, createdAt);
+  const { v, scope, id, type, publicKey, createdAt, label } = fields;
+  // A tagged pair only when present, so records without a label keep their exact format-v1 AAD.
+  const optional = label === undefined ? [] : ['label', label];
+  return encode(LABEL_KEY_AAD, v, scope, id, type, publicKey, createdAt, ...optional);
+}
+
+/** A scope name, as the API accepts it and as storage must hold it. */
+export function isScopeName(value: unknown): value is string {
+  return isString(value) && value.length > 0 && value.length <= MAX_SCOPE_LENGTH;
+}
+
+/** A label, as the API accepts it and as storage must hold it. */
+export function isLabel(value: unknown): value is string {
+  return isString(value) && value.length > 0 && value.length <= MAX_LABEL_LENGTH;
 }
 
 export function corrupted(what: string, cause?: unknown): VaultError {
