@@ -1,0 +1,3 @@
+# Markdown stays hand-formatted: Prettier pads every table column, so one longer
+# cell rewrites the whole table and buries the real change in review (D-26).
+*.md
