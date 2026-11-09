@@ -70,6 +70,7 @@ async function sign(key: KeyInfo) {
   const message = new TextEncoder().encode(messageInput.value);
   const signature = await scope().sign(key, message);
   const [verified, verifier] = await verify(key, signature, message);
+  output.dataset.key = key.id; // which key the attributes below belong to
   output.dataset.signature = hex(signature.bytes);
   output.dataset.verified = String(verified);
   output.textContent = [

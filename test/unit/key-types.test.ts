@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+import { secp256k1 as curve } from '@noble/curves/secp256k1.js';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import type { Bytes } from '../../src/bytes.ts';
 import { ed25519 } from '../../src/ed25519.ts';
@@ -43,7 +44,8 @@ describe('secp256k1', () => {
     for (let i = 0; i < 16; i++) {
       const { bytes } = await scope.sign(key, new TextEncoder().encode(`message ${i}`));
       expect(bytes).toHaveLength(64);
-      expect(toBigInt(bytes.subarray(32))).toBeLessThanOrEqual(N / 2n);
+      const s = bytes.subarray(32);
+      expect(toBigInt(s) <= N / 2n, `s = ${s.toHex()}`).toBe(true); // a boolean: vitest can't report BigInts from the browser
     }
   });
 
@@ -53,7 +55,8 @@ describe('secp256k1', () => {
     expect([0x02, 0x03]).toContain(key.publicKey[0]);
 
     let offCurve = Uint8Array.of(0x02, ...scalarBytes(1n));
-    for (let x = 2n; secp256k1.isValidPublicKey(offCurve); x++) offCurve = Uint8Array.of(0x02, ...scalarBytes(x));
+    // Found with noble directly, not with the code under test.
+    for (let x = 2n; curve.utils.isValidPublicKey(offCurve, true); x++) offCurve = Uint8Array.of(0x02, ...scalarBytes(x));
     const malformed = [offCurve, Uint8Array.of(0x04, ...key.publicKey.subarray(1)), Uint8Array.of(0x05, ...key.publicKey.subarray(1))];
     for (const publicKey of malformed) {
       const { scope: planted, name } = await openVault();
@@ -78,7 +81,9 @@ describe('secp256k1', () => {
     const key = await plantKey(name, 'secp256k1', real.publicKey, ({ key, params }) => crypto.subtle.encrypt(params, key, plaintext));
 
     expect((await scope.list()).map((k) => k.id)).toContain(key.id);
-    await expectVaultError(scope.sign(key, message), 'corrupted');
+    const error = await expectVaultError(scope.sign(key, message), 'corrupted');
+    // Vault's own check, before noble sees the value (noble would also refuse it; verify-after-sign is a third guard).
+    expect(error.cause).toMatchObject({ message: 'The sealed value is not a secp256k1 private key' });
   });
 
   test('Vault zeroes the secret buffers it owns: the key-generation seed, the generated scalar and every decrypted scalar', async () => {

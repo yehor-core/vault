@@ -30,6 +30,8 @@ async function signAndVerifyOutside(page: Page, row: Locator, message: string) {
   await page.fill('#message', message);
   await row.getByRole('button', { name: 'Sign' }).click();
   const output = page.locator('#output');
+  // Wait for this key's signature: the previous one's attributes stay until the new one is written.
+  await expect(output).toHaveAttribute('data-key', (await row.getAttribute('data-id'))!);
   await expect(output).toHaveAttribute('data-verified', 'true');
   const [type, publicKey, signature] = [
     (await row.getAttribute('data-type'))!,
