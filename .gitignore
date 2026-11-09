@@ -1,5 +1,9 @@
 node_modules/
 
+# Claude Code: per-session worktrees and personal settings
+/.claude/worktrees/
+/.claude/settings.local.json
+
 # Library build output (npm run build)
 dist/
 
