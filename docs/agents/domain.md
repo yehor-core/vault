@@ -28,6 +28,7 @@ Where a skill would write an ADR to `docs/adr/`, append an entry to `docs/DECISI
 
 - Use the next free ID (`D-NN`) and the existing format: decision, alternatives, why, what we give up.
 - If it answers an item under "## Decisions required by the task", put the ID next to that item.
+- If it constrains a later slice in `docs/ROADMAP.md`, end the entry with `[constrains S<N>]` and say how.
 - Never rewrite a past decision. Add a new entry and mark the old one "superseded by D-NN".
 
 ## Use the glossary's vocabulary

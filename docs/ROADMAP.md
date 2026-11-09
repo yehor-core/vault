@@ -1,5 +1,7 @@
 # Slices
 
+Check every design option for a slice against all later slices. No migration code is planned (see "Not planned"), so a storage format chosen in one slice must serve every later slice without one.
+
 ## S0: Skeleton
 Status: done · Spec: #- · Tickets: #-
 - Vite + TS
