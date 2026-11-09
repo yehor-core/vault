@@ -15,20 +15,8 @@ Roadmap → slice → spec → tickets → one PR per ticket. I start each step.
 1. `/grill-with-docs` on the next planned slice in ROADMAP.md.
 2. `/to-spec` publishes the slice spec as an issue. In ROADMAP.md, set the slice's `Spec: #<n>` and `Status: in progress`.
 3. `/to-tickets` drafts vertical tickets with "Blocked by" and waits for my approval before publishing. Put their numbers in the slice's `Tickets:`.
-4. For each ticket on the frontier (open, no open blocker): create the branch (see Git), then `/implement #<issue>`. It runs TDD and `/code-review`, and commits.
+4. For each ticket on the frontier (open, no open blocker): create the branch (see Git), then `/implement #<issue>`. It runs TDD and `/code-review`, and commits. If a design decision comes up that the spec doesn't settle, stop and ask; don't decide it silently or work around it.
 5. I review and merge each PR. After the last ticket of a slice: the slice wrap-up below.
-
-## Decisions
-- I own every decision. Ask only about decisions that affect the public API, the storage format, a security guarantee, or are hard to reverse. Make smaller choices yourself and list them in the PR.
-- Present each such decision as numbered options with letters (1A, 2B) so I can answer in one line. For each option: what it gives, what it costs, which TASK.md requirement or threat-model case it touches. Recommend one and say what would make you pick another. Drop options that clearly fail TASK.md.
-- Check every option against all of TASK.md and the later slices in ROADMAP.md. No migration code is planned: the storage format chosen now must serve later slices. Mark decisions that constrain later slices with "[constrains S<N>]".
-- If my choice breaks TASK.md or a decision in DECISIONS.md, quote it before going on. If I keep it, record it in DECISIONS.md and in DESIGN.md §11 Known limitations.
-- If a new design decision comes up during `/implement`, stop and ask in the same format. Don't decide it silently or work around it.
-- Record each decision I make in DECISIONS.md, as `docs/agents/domain.md` describes. Decisions already there are binding; reopen one only if you find a conflict, and flag it.
-
-## Explaining
-- When you introduce a crypto or IndexedDB concept, explain it in chat in 2–3 plain sentences.
-- When I say `/wait-what`, restate your last answer in plain words.
 
 ## Tests
 - TDD at the seams agreed in the spec: the failing run before the implementation is the proof that the test can fail. For a test added to existing code, break the code it guards once, show red, restore.
