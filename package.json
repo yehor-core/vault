@@ -16,6 +16,7 @@
     "build": "tsc -p tsconfig.build.json",
     "demo": "vite demo",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.node.json",
+    "check:refs": "node scripts/check-test-refs.ts",
     "test": "npm run test:unit && npm run test:e2e",
     "test:unit": "vitest run",
     "test:e2e": "playwright test"

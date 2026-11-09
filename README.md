@@ -19,7 +19,8 @@ npx playwright install --with-deps chromium firefox webkit   # --with-deps insta
 |---|---|
 | `npm run build` | Compiles the library to `dist/` (ES modules and `.d.ts`) |
 | `npm run demo` | Serves the demo page at http://localhost:5173: generate, list, sign (verified with WebCrypto outside Vault), delete, wipe |
-| `npm run typecheck` | Type checks browser code (`tsconfig.json`, no Node globals) and Node-side config and e2e tests (`tsconfig.node.json`) |
+| `npm run typecheck` | Type checks browser code (`tsconfig.json`, no Node globals) and Node-side config, scripts and e2e tests (`tsconfig.node.json`) |
+| `npm run check:refs` | Checks that every test cited in `DESIGN.md` and `README.md` (`storage › …`) still exists |
 | `npm run test:unit` | Vitest Browser Mode in real Chromium, Firefox and WebKit (`test/unit`) |
 | `npm run test:e2e` | Playwright against the demo page in Chromium, Firefox and WebKit (`test/e2e`); starts its own server on :5174 |
 | `npm test` | Both suites |
