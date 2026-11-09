@@ -11,6 +11,7 @@
       code, pre { font-family: ui-monospace, monospace; font-size: 13px; }
       pre { background: #f5f5f5; padding: 0.8rem; white-space: pre-wrap; word-break: break-all; }
       #status.error { color: #b00020; }
+      .hint { color: #777; font-size: 13px; }
     </style>
   </head>
   <body>
@@ -19,7 +20,7 @@
       Keys live in named scopes; wipe clears every scope.</p>
     <p id="status">Loading…</p>
 
-    <p><label>Scope <input id="scope" value="demo" size="20" /></label></p>
+    <p><label>Scope <input id="scope" value="demo" size="20" /></label> <span class="hint">press Enter to list this scope</span></p>
     <p>
       <label>Type
         <select id="type">

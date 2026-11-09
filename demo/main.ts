@@ -43,7 +43,8 @@ function row(key: KeyInfo): HTMLTableRowElement {
   const cells = [key.label ?? '—', key.id.slice(0, 12) + '…', key.type, hex(key.publicKey).slice(0, 16) + '…', key.createdAt.toLocaleTimeString()];
   for (const text of cells) tr.insertCell().textContent = text;
   const actions = tr.insertCell();
-  actions.append(button('Sign', () => sign(key)), ' ', button('Delete', () => scope().delete(key)));
+  // The key's own scope, not the field: the field may have been edited since this row was listed.
+  actions.append(button('Sign', () => sign(key)), ' ', button('Delete', () => vault.scope(key.scope).delete(key)));
   return tr;
 }
 
@@ -68,7 +69,7 @@ async function verify(key: KeyInfo, signature: Signature, message: Uint8Array<Ar
 
 async function sign(key: KeyInfo) {
   const message = new TextEncoder().encode(messageInput.value);
-  const signature = await scope().sign(key, message);
+  const signature = await vault.scope(key.scope).sign(key, message);
   const [verified, verifier] = await verify(key, signature, message);
   output.dataset.key = key.id; // which key the attributes below belong to
   output.dataset.signature = hex(signature.bytes);

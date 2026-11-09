@@ -72,7 +72,7 @@ test('demo creates, lists, signs, deletes and wipes keys of both types, and its 
 
   // Another scope sees none of these keys; wipe clears every scope.
   await page.fill('#scope', 'other');
-  await page.locator('#scope').dispatchEvent('change');
+  await page.press('#scope', 'Enter');
   await ready(page);
   await expect(rows).toHaveCount(0);
   await generate(page, 'ed25519', 'elsewhere');
@@ -84,7 +84,7 @@ test('demo creates, lists, signs, deletes and wipes keys of both types, and its 
   await ready(page);
   await expect(rows).toHaveCount(0);
   await page.fill('#scope', 'other');
-  await page.locator('#scope').dispatchEvent('change');
+  await page.press('#scope', 'Enter');
   await ready(page);
   await expect(rows).toHaveCount(0);
 });
