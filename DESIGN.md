@@ -5,7 +5,7 @@ Template. Guidance lives in HTML comments; delete each comment once its section 
 Rules for filling:
 - Short as it can be while complete. Prefer tables and one-line statements over prose.
 - Every guarantee names the code or test that enforces it (file:test name). No reference → write "not protected".
-- Self-contained: the decision log is not in the repository, so state each decision's outcome and rejected alternatives here, without links or decision IDs.
+- Self-contained: state each decision's outcome and rejected alternatives here, without links or decision IDs, so the document reads on its own.
 -->
 
 Test references: `storage ›` = `test/unit/storage.test.ts`, `records ›` = `test/unit/records.test.ts`, `vault ›` = `test/unit/vault.test.ts`, `e2e ›` = `test/e2e/demo.spec.ts`. Unit tests run in Chromium, Firefox and WebKit.
