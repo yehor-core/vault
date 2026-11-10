@@ -16,7 +16,7 @@ Status: done · Spec: #- · Tickets: #-
 - demo: create, list, sign, wipe
 
 ## S2: Key types and scopes
-Status: in progress · Spec: #- · Tickets: #-
+Status: in progress · Spec: #9 · Tickets: #-
 - key-type interface
 - secp256k1
 - scopes
