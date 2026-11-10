@@ -20,7 +20,10 @@ Status: in progress · Spec: #- · Tickets: #-
 - key-type interface
 - secp256k1
 - scopes
-- labels / metadata
+- labels
+- read-time validation of every field S2 adds
+
+Not included: scopes in the demo, which stays on one fixed scope (S7 decides)
 
 ## S3: Storage integrity
 Status: planned · Spec: #- · Tickets: #-
@@ -28,7 +31,7 @@ Status: planned · Spec: #- · Tickets: #-
 - atomic multi-record writes
 - empty vault, eviction, persistent storage
 
-Not included: protection records (S6)
+Not included: protection records (S6); validation of the fields S2 adds (S2)
 
 ## S4: Multi-tab
 Status: planned · Spec: #- · Tickets: #-
@@ -62,6 +65,7 @@ Status: planned · Spec: #- · Tickets: #-
 ## S7: Demo and docs
 Status: planned · Spec: #- · Tickets: #-
 - full demo, incl. passkey key in a fresh profile
+- decide whether the demo shows scopes
 - DESIGN.md
 - README: browser matrix, property → test table
 - manual passkey checks in Firefox and WebKit
@@ -69,3 +73,5 @@ Status: planned · Spec: #- · Tickets: #-
 ## Not planned
 - disabling protection, changing the unlock passkey
 - migration code (described only)
+- listing the scopes of a vault, clearing one scope, filtering `list()` by key type
+- renaming a label; caller-supplied metadata beyond the label
