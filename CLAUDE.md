@@ -12,7 +12,7 @@ Read these when the step needs them:
 Roadmap → slice → spec → tickets → one PR per ticket. I start each step.
 1. `/grill-with-docs` on the next planned slice in ROADMAP.md.
 2. `/to-spec` publishes the slice spec as an issue. In ROADMAP.md, set the slice's `Spec: #<n>` and `Status: in progress`.
-3. `/to-tickets` drafts vertical tickets with "Blocked by" and waits for my approval before publishing. Put their numbers in the slice's `Tickets:`.
+3. `/to-tickets` drafts vertical tickets with "Blocked by" and waits for my approval before publishing. Each ticket names the decisions that bind it (`Decision: D-NN`). Put their numbers in the slice's `Tickets:`.
 4. For each ticket on the frontier (open, no open blocker): create the branch (see Git), then `/implement #<issue>`. It runs TDD and `/code-review`, and commits.
 5. I review and merge each PR. After the last ticket of a slice is merged: `/wrap-up`.
 
