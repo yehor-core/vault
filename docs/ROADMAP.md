@@ -21,6 +21,7 @@ Status: in progress · Spec: #- · Tickets: #-
 - secp256k1
 - scopes
 - labels
+- read-time validation of every field S2 adds
 
 Not included: scopes in the demo, which stays on one fixed scope (S7 decides)
 
@@ -30,7 +31,7 @@ Status: planned · Spec: #- · Tickets: #-
 - atomic multi-record writes
 - empty vault, eviction, persistent storage
 
-Not included: protection records (S6)
+Not included: protection records (S6); validation of the fields S2 adds (S2)
 
 ## S4: Multi-tab
 Status: planned · Spec: #- · Tickets: #-
