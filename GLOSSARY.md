@@ -23,3 +23,15 @@ _Avoid_: global key; "passkey" alone when the key is meant
 **Unlock passkey**:
 The one passkey that unlocks a protected vault. It belongs to the vault as a whole, not to a scope, and it signs nothing.
 _Avoid_: protection passkey, master passkey, global key
+
+**Scope**:
+A named group of keys inside one vault. It has no record of its own: it is there while it holds keys, and all scopes share the vault's protection and its wipe.
+_Avoid_: namespace, account, wallet, tenant, consumer
+
+**Consumer**:
+An application that keeps its keys in a scope of its own; in the product, another site that reaches the vault through the embedding layer. The vault does not authenticate consumers.
+_Avoid_: client, tenant, app
+
+**Embedding layer**:
+The part of the product, outside the vault library, that receives requests from other sites and chooses the scope from the sender's origin. It is what keeps consumers apart. Described, not built.
+_Avoid_: bridge, host, wrapper
