@@ -12,7 +12,7 @@ Read these when the step needs them:
 Roadmap → slice → spec → tickets → one PR per ticket. I start each step.
 1. `/grill-with-docs` on the next planned slice in ROADMAP.md.
 2. `/to-spec` publishes the slice spec as an issue. In ROADMAP.md, set the slice's `Spec: #<n>` and `Status: in progress`.
-3. `/to-tickets` drafts vertical tickets with "Blocked by" and waits for my approval before publishing. Put their numbers in the slice's `Tickets:`.
+3. `/to-tickets` drafts vertical tickets with "Blocked by" and waits for my approval before publishing. Each ticket names the decisions that bind it (`Decision: D-NN`). Put their numbers in the slice's `Tickets:`.
 4. For each ticket on the frontier (open, no open blocker): create the branch (see Git), then `/implement #<issue>`. It runs TDD and `/code-review`, and commits.
 5. I review and merge each PR. After the last ticket of a slice is merged: `/wrap-up`.
 
@@ -23,7 +23,8 @@ Roadmap → slice → spec → tickets → one PR per ticket. I start each step.
 - One ticket = one branch = one PR. Before `/implement`, create `S<N>/<NN>-<short-name>` from an up-to-date `main`.
 - Commit messages reference the ticket (`Refs #<issue>`), so `/code-review` finds the spec.
 - In a new worktree, run `npx husky` once before the first commit: it creates the git-ignored `.husky/_` that runs the pre-commit hook (D-26).
-- When the ticket is done: push, then `gh pr create`. Title `S<N>-<NN>: <ticket title>`. Body: `Closes #<issue>`, the decision IDs made, the `/code-review` summary, the test summary output.
+- When the ticket is done: push, then `gh pr create`. Title `S<N>-<NN>: <ticket title>`. Body: `Closes #<issue>` first, then the `/pr` template, then a short `/code-review` summary.
+- The planning records of a slice (what steps 1–3 change in GLOSSARY.md, DECISIONS.md and ROADMAP.md) share one branch, `S<N>/00-plan`, and one PR, opened after `/to-tickets`.
 
 ## Ticket done means
 1. Every acceptance criterion in the ticket is met.

@@ -5,7 +5,9 @@ How the engineering skills should consume this repo's domain documentation when 
 ## Before exploring, read these
 
 - **`GLOSSARY.md`** at the repo root.
-- **`docs/DECISIONS.md`**: this repo's decision log, used instead of `docs/adr/`. Read the entries that touch the area you're about to work in. Decisions are numbered `D-NN` and are binding.
+- **`docs/DECISIONS.md`**: this repo's decision log, used instead of `docs/adr/`. Decisions are numbered `D-NN` and are binding. Each entry is one line, so read entries one at a time:
+  - The entries your ticket or spec names: `grep '^D-16:' docs/DECISIONS.md`.
+  - The list of all decisions, one sentence each: `grep -o '^D-[0-9]*: [^.]*\.' docs/DECISIONS.md`. Then read the entries that touch your area.
 
 If either file doesn't exist, **proceed silently**. Don't flag its absence; don't suggest creating it upfront. The `/domain-modeling` skill (reached via `/grill-with-docs` and `/improve-codebase-architecture`) creates `GLOSSARY.md` lazily when terms actually get resolved.
 
@@ -27,6 +29,7 @@ Single-context repo:
 Where a skill would write an ADR to `docs/adr/`, append an entry to `docs/DECISIONS.md` under "## Decisions we make while building" instead. Don't create `docs/adr/`.
 
 - Use the next free ID (`D-NN`) and the existing format: decision, alternatives, why, what we give up.
+- Start the entry with one short sentence that names the outcome and has no full stop inside it (so no file names): the list command above prints exactly that sentence.
 - If it answers an item under "## Decisions required by the task", put the ID next to that item.
 - If it constrains a later slice in `docs/ROADMAP.md`, end the entry with `[constrains S<N>]` and say how.
 - Never rewrite a past decision. Add a new entry and mark the old one "superseded by D-NN".

@@ -2,6 +2,8 @@
 
 Check every design option for a slice against all later slices. No migration code is planned (see "Not planned"), so a storage format chosen in one slice must serve every later slice without one.
 
+When an attempt at a slice is abandoned, add one line under the slice: what stays in force (its decisions) and what is dead (its branch and PR).
+
 ## S0: Skeleton
 Status: done · Spec: #- · Tickets: #-
 - Vite + TS

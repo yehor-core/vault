@@ -1,4 +1,7 @@
 npx lint-staged
-npm run typecheck
 npm run check:refs
-npm run test
+# A commit that stages only Markdown cannot change what the compiler or the tests see. CI runs everything on the pull request.
+if git diff --cached --name-only | grep -qv '\.md$'; then
+  npm run typecheck
+  npm run test
+fi
