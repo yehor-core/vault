@@ -27,10 +27,10 @@ npx playwright install --with-deps chromium firefox webkit   # --with-deps insta
 | `npm run check:decisions` | Checks that no past decision in `docs/DECISIONS.md` was rewritten since the merge-base with `origin/main`: it only gains notes naming a new decision |
 | `npm run test:unit` | Vitest Browser Mode in real Chromium, Firefox and WebKit (`test/unit`) |
 | `npm run test:e2e` | Playwright against the demo page in Chromium, Firefox and WebKit (`test/e2e`); starts its own server on :5174 |
-| `npm run test:scripts` | Node tests of the repo's own scripts (`scripts/*.test.ts`), e.g. that `check:refs` rejects a bad citation, `check:decisions` a rewritten decision, `check:casts` an unexplained cast, and that `break-check` reports red correctly (`--typecheck`, `--batch`, and the engines a vitest break runs in) |
+| `npm run test:scripts` | Node tests of the repo's own scripts (`scripts/*.test.ts`), e.g. that `check:refs` rejects a bad citation, `check:decisions` a rewritten decision, `check:casts` an unexplained cast, and that `break-check` reports red correctly (`--typecheck`, `--batch`, and the engines a vitest or Playwright break runs in) |
 | `npm test` | Script tests, then both suites |
 | `npx vitest run <file> -t '<name>' --project chromium` | One unit test in one engine (`chromium`, `firefox` or `webkit`): the fast TDD loop |
-| `npm run break-check -- <file> <text> <replacement> <test file> '<name>' [engine]` | Breaks the code once, runs the test, restores the code; exit 0 only if the test went red. Without `engine`, the test runs in Chromium, Firefox and WebKit and must go red in each; name one engine for a fast loop. `--typecheck <file> <text> <replacement> <test file>`: red when `npm run typecheck` fails in that test file. `--batch <breaks.json>`: a JSON array of `{ file, text, replacement, test, pattern?, engine?, typecheck? }`, each run alone |
+| `npm run break-check -- <file> <text> <replacement> <test file> '<name>' [engine]` | Breaks the code once, runs the test, restores the code; exit 0 only if the test went red. Without `engine`, the test runs in Chromium, Firefox and WebKit and must go red in each; name one engine for a fast loop. A test file under `test/e2e/` runs in Playwright, any other in vitest. `--typecheck <file> <text> <replacement> <test file>`: red when `npm run typecheck` fails in that test file. `--batch <breaks.json>`: a JSON array of `{ file, text, replacement, test, pattern?, engine?, typecheck? }`, each run alone |
 
 ```ts
 import { Vault } from 'vault';

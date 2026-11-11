@@ -1,10 +1,13 @@
-npx lint-staged
-npm run check:refs
-npm run check:decisions
-npm run check:casts
+npx lint-staged --quiet
+npm run --silent check:refs
+npm run --silent check:decisions
+npm run --silent check:casts
 # A commit that stages only Markdown cannot change what the compiler or the tests see. CI runs everything on the pull request.
 if git diff --cached --name-only | grep -qv '\.md$'; then
-  npm run lint
-  npm run typecheck
-  npm run test
+  npm run --silent lint
+  npm run --silent typecheck
+  # `npm test`, with dot reporters: a passing run prints its summaries, a failing one the failures in full.
+  npm run --silent test:scripts -- --test-reporter=dot
+  npm run --silent test:unit -- --reporter=dot
+  npm run --silent test:e2e -- --reporter=dot
 fi

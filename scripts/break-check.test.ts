@@ -1,6 +1,6 @@
 // break-check on a fixture repo whose `npm run typecheck` is a stand-in: it fails, naming test/types.test.ts, when
-// src/code.ts holds BROKEN, and naming test/other.test.ts on OTHER. `npx` is a stand-in too: its vitest run fails
-// in the engines listed in FAKE_RED and passes in the others, so the engine handling runs without browsers.
+// src/code.ts holds BROKEN, and naming test/other.test.ts on OTHER. `npx` is a stand-in too: its vitest or Playwright
+// run fails in the engines listed in FAKE_RED and passes in the others, so the engine handling runs without browsers.
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -16,12 +16,19 @@ const source = require('node:fs').readFileSync('src/code.ts', 'utf8');
 if (source.includes('BROKEN')) { console.log('test/types.test.ts(1,1): error TS2344'); process.exit(1); }
 if (source.includes('OTHER')) { console.log('test/other.test.ts(1,1): error TS2344'); process.exit(1); }
 `;
-// The engine is the last argument break-check passes: `vitest run <test> -t <pattern> --project <engine>`.
+// The engine is the last argument break-check passes: `vitest run <test> -t <pattern> --project <engine>`, or
+// `playwright test <test> -g <pattern> --project <engine>`. Each tool prints its own summary.
 const NPX = `#!/bin/sh
+tool=$1
 for arg in "$@"; do engine=$arg; done
 case " $FAKE_RED " in
-  *" $engine "*) echo ' Tests  1 failed (1)'; echo ' × the guarded test'; exit 1 ;;
+  *" $engine "*) red=1 ;;
 esac
+if [ "$tool" = playwright ]; then
+  if [ -n "$red" ]; then echo '  1 failed'; echo "  ✘  1 [$engine] › the guarded test"; exit 1; fi
+  echo '  1 passed (1.0s)'; exit 0
+fi
+if [ -n "$red" ]; then echo ' Tests  1 failed (1)'; echo ' × the guarded test'; exit 1; fi
 echo ' Tests  1 passed (1)'
 `;
 
@@ -134,4 +141,17 @@ test('a named engine runs the vitest break in that engine alone', () => {
   );
   assert.equal(batch.status, 1, batch.output);
   assert.deepEqual(batch.output.match(/red in \w+/g), ['red in firefox']);
+});
+
+const e2eBreak = ['src/code.ts', 'true', 'false', 'test/e2e/demo.spec.ts', 'the guarded test'];
+
+test('a break of an e2e test runs Playwright in Chromium, Firefox and WebKit, and is red only if red in each', () => {
+  const all = breakCheck(e2eBreak, undefined, 'chromium firefox webkit');
+  assert.equal(all.status, 0, all.output);
+  assert.deepEqual(all.output.match(/^red in \w+/gm), ['red in chromium', 'red in firefox', 'red in webkit']);
+  assert.equal(all.code, CODE);
+
+  const two = breakCheck(e2eBreak, undefined, 'chromium firefox');
+  assert.equal(two.status, 1, two.output);
+  assert.match(two.output, /^NOT red in webkit: 1 passed/m);
 });
