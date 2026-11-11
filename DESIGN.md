@@ -8,7 +8,7 @@ Rules for filling:
 - Self-contained: state each decision's outcome and rejected alternatives here, without links or decision IDs, so the document reads on its own.
 -->
 
-Test references: `storage ›` = `test/unit/storage.test.ts`, `records ›` = `test/unit/records.test.ts`, `vault ›` = `test/unit/vault.test.ts`, `key-types ›` = `test/unit/key-types.test.ts`, `e2e ›` = `test/e2e/demo.spec.ts`. Unit tests run in Chromium, Firefox and WebKit.
+Test references: `<name> ›` cites `test/unit/<name>.test.ts`, `e2e ›` cites `test/e2e/`. Unit tests run in Chromium, Firefox and WebKit.
 
 ## 1. Overview
 

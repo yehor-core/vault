@@ -24,7 +24,8 @@ npx playwright install --with-deps chromium firefox webkit   # --with-deps insta
 | `npm run check:refs` | Checks that every test cited in `DESIGN.md` and `README.md` (`storage › …`) still exists |
 | `npm run test:unit` | Vitest Browser Mode in real Chromium, Firefox and WebKit (`test/unit`) |
 | `npm run test:e2e` | Playwright against the demo page in Chromium, Firefox and WebKit (`test/e2e`); starts its own server on :5174 |
-| `npm test` | Both suites |
+| `npm run test:scripts` | Node tests of the repo's own scripts (`scripts/*.test.ts`), e.g. that `check:refs` rejects a bad citation |
+| `npm test` | Script tests, then both suites |
 | `npx vitest run <file> -t '<name>' --project chromium` | One unit test in one engine (`chromium`, `firefox` or `webkit`): the fast TDD loop |
 | `npm run break-check -- <file> <text> <replacement> <test file> '<name>' [engine]` | Breaks the code once, runs the test, restores the code; exit 0 only if the test went red |
 
@@ -53,7 +54,7 @@ Needs WebCrypto Ed25519, ECDH P-256, HKDF and AES-GCM, IndexedDB and `Uint8Array
 
 ## Property → test
 
-Test references: `vault ›` = `test/unit/vault.test.ts`, `storage ›` = `test/unit/storage.test.ts`, `records ›` = `test/unit/records.test.ts`, `platform ›` = `test/unit/platform.test.ts`, `key-types ›` = `test/unit/key-types.test.ts`, `e2e ›` = `test/e2e/demo.spec.ts`; a middle segment names the `describe` group. `npm run check:refs` checks that every cited test exists. Every unit test runs in all three engines, except one test skipped in WebKit, as noted in its row. Every test about keys runs once per registered key type. Each row was break-checked: the guarding code was broken once and the test went red in every listed engine. Where two guards protect one property, both were broken together. Exception: breaking the SPKI guard turns its test red only in WebKit, the only engine whose `raw` import accepts off-curve points. Not break-checked: the two platform rows, "Keys persist" and "Opening and listing write nothing", which are functional checks.
+Test references: `<name> ›` cites `test/unit/<name>.test.ts`, `e2e ›` cites `test/e2e/`; a middle segment names the `describe` group. `npm run check:refs` checks that every cited test exists. Every unit test runs in all three engines, except one test skipped in WebKit, as noted in its row. Every test about keys runs once per registered key type. Each row was break-checked: the guarding code was broken once and the test went red in every listed engine. Where two guards protect one property, both were broken together. Exception: breaking the SPKI guard turns its test red only in WebKit, the only engine whose `raw` import accepts off-curve points. Not break-checked: the two platform rows, "Keys persist" and "Opening and listing write nothing", which are functional checks.
 
 | Property | Test | Engines |
 |---|---|---|
