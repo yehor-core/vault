@@ -1,5 +1,54 @@
 import { expect, vi } from 'vitest';
-import { Vault, VaultError, type Scope, type VaultErrorCode } from '../../src/index.ts';
+import { Vault, VaultError, type KeyTypeName, type Scope, type VaultErrorCode } from '../../src/index.ts';
+
+/** What the tests know about one key type, independently of Vault's code. */
+export interface KeyTypeCase {
+  readonly type: KeyTypeName;
+  readonly publicKeyLength: number;
+  readonly signatureLength: number;
+  /** Verifies a signature with code that is not Vault's. */
+  verify(
+    publicKey: Uint8Array<ArrayBuffer>,
+    signature: Uint8Array<ArrayBuffer>,
+    data: Uint8Array<ArrayBuffer>,
+  ): Promise<boolean>;
+  /** Stored public keys that are not valid for this type. */
+  readonly invalidPublicKeys: readonly { readonly label: string; readonly bytes: Uint8Array<ArrayBuffer> }[];
+  /** Starts recording the private keys Vault generates; the function it returns reads their raw bytes. */
+  recordPrivateKeys(): () => Promise<Uint8Array[]>;
+}
+
+// The only place tests hold type-specific inputs. Typed by the registry: a new key type fails to compile
+// until it has an entry here, and then every per-type test runs for it.
+const keyTypeCaseByName: { [T in KeyTypeName]: KeyTypeCase & { readonly type: T } } = {
+  ed25519: {
+    type: 'ed25519',
+    publicKeyLength: 32,
+    signatureLength: 64,
+    async verify(publicKey, signature, data) {
+      const key = await crypto.subtle.importKey('raw', publicKey, 'Ed25519', false, ['verify']);
+      return crypto.subtle.verify('Ed25519', key, signature, data);
+    },
+    invalidPublicKeys: [
+      { label: '31 bytes', bytes: crypto.getRandomValues(new Uint8Array(31)) },
+      { label: '33 bytes', bytes: crypto.getRandomValues(new Uint8Array(33)) },
+      { label: 'empty', bytes: new Uint8Array() },
+    ],
+    recordPrivateKeys() {
+      // Vault seals an ed25519 key with wrapKey; the test may export it, Vault never does.
+      const wrapKey = vi.spyOn(crypto.subtle, 'wrapKey');
+      return () =>
+        Promise.all(
+          wrapKey.mock.calls.map(async ([, key]) =>
+            new Uint8Array(await crypto.subtle.exportKey('pkcs8', key)).slice(-32),
+          ),
+        );
+    },
+  },
+};
+
+/** One case per registered key type: `describe.each(keyTypeCases)`. */
+export const keyTypeCases: readonly KeyTypeCase[] = Object.values(keyTypeCaseByName);
 
 /** Date.now() advancing 1 ms per call, so keys never share a creation millisecond. Restored by vi.restoreAllMocks. */
 export function tickingClock(): void {
