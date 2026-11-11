@@ -1,5 +1,8 @@
 import { Vault, VaultError, type KeyInfo } from '../src/index.ts';
 
+// One fixed scope: whether the demo shows scopes is decided later.
+const SCOPE = 'demo';
+
 const status = document.getElementById('status')!;
 const rows = document.getElementById('keys')!;
 const output = document.getElementById('output')!;
@@ -24,17 +27,26 @@ function show(error: unknown) {
 }
 
 async function refresh() {
-  rows.replaceChildren(...(await vault.list()).map(row));
+  rows.replaceChildren(...(await keys.list()).map(row));
 }
 
 function row(key: KeyInfo): HTMLTableRowElement {
   const tr = document.createElement('tr');
   tr.dataset.id = key.id;
   tr.dataset.publicKey = hex(key.publicKey);
-  const cells = [key.id.slice(0, 12) + '…', key.type, hex(key.publicKey).slice(0, 16) + '…', key.createdAt.toLocaleTimeString()];
+  const cells = [
+    key.id.slice(0, 12) + '…',
+    key.type,
+    hex(key.publicKey).slice(0, 16) + '…',
+    key.createdAt.toLocaleTimeString(),
+  ];
   for (const text of cells) tr.insertCell().textContent = text;
   const actions = tr.insertCell();
-  actions.append(button('Sign', () => sign(key)), ' ', button('Delete', () => vault.delete(key.id)));
+  actions.append(
+    button('Sign', () => sign(key)),
+    ' ',
+    button('Delete', () => keys.delete(key.id)),
+  );
   return tr;
 }
 
@@ -47,7 +59,7 @@ function button(label: string, action: () => Promise<void>): HTMLButtonElement {
 
 async function sign(key: KeyInfo) {
   const message = new TextEncoder().encode(messageInput.value);
-  const signature = await vault.sign(key.id, message);
+  const signature = await keys.sign(key.id, message);
   // Verification needs only the public key: no Vault involved.
   const publicKey = await crypto.subtle.importKey('raw', key.publicKey, 'Ed25519', false, ['verify']);
   const verified = await crypto.subtle.verify('Ed25519', publicKey, signature.bytes, message);
@@ -66,7 +78,9 @@ const vault = await Vault.open().catch((error: unknown) => {
   show(error);
   throw error;
 });
-document.getElementById('generate')!.onclick = () => run(async () => void (await vault.generate('ed25519')));
+const keys = vault.scope(SCOPE);
+document.getElementById('scope')!.textContent = SCOPE;
+document.getElementById('generate')!.onclick = () => run(async () => void (await keys.generate('ed25519')));
 document.getElementById('wipe')!.onclick = () =>
   run(async () => {
     await vault.wipe();

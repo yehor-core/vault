@@ -3,7 +3,7 @@ import { server } from 'vitest/browser';
 import { base64url, encode, type Bytes } from '../../src/bytes.ts';
 import { ed25519 } from '../../src/ed25519.ts';
 import { Vault } from '../../src/index.ts';
-import { keyAad, keyId, parseKeyRecord, type KeyFields } from '../../src/records.ts';
+import { keyAad, keyId, type KeyFields } from '../../src/records.ts';
 import { generateWrappingKey, importPublicKey, seal, unseal } from '../../src/seal.ts';
 import {
   cleanup,
@@ -44,12 +44,12 @@ function contains(haystack: Uint8Array, needle: Uint8Array): boolean {
 }
 
 /** Adds a self-consistent key record with the given public key, as any storage writer can: no secret needed. */
-async function plantKey(name: string, publicKey: Bytes): Promise<string> {
+async function plantKey(name: string, scope: string, publicKey: Bytes): Promise<string> {
   const header = await readHeader(name);
   const fields: KeyFields = {
     v: 1,
-    scope: 'default',
-    id: await keyId('default', 'ed25519', publicKey),
+    scope,
+    id: await keyId(scope, 'ed25519', publicKey),
     type: 'ed25519',
     publicKey,
     createdAt: Date.now(),
@@ -86,7 +86,18 @@ describe('canonical encoding', () => {
     expect(encode(new Uint8Array([49, 50, 51]))).not.toEqual(encode('123'));
     expect(encode('a', 'bc')).not.toEqual(encode('ab', 'c'));
     // 2 ** 64 matters most: written as 8 bytes it would wrap around and encode exactly like 0.
-    const rejected = [[1, 2, 3], new Int8Array([1]), new Uint8Array([1]).buffer, -1, 1.5, NaN, null, 2 ** 53, 2 ** 64, Infinity];
+    const rejected = [
+      [1, 2, 3],
+      new Int8Array([1]),
+      new Uint8Array([1]).buffer,
+      -1,
+      1.5,
+      NaN,
+      null,
+      2 ** 53,
+      2 ** 64,
+      Infinity,
+    ];
     for (const value of rejected) {
       expect(() => encode(value as never)).toThrow(TypeError);
     }
@@ -96,9 +107,9 @@ describe('canonical encoding', () => {
 describe('encryption at rest', () => {
   test('no private key bytes are stored: only ciphertext and a non-extractable root key', async () => {
     const wrapKey = vi.spyOn(crypto.subtle, 'wrapKey');
-    const { vault, name } = await openVault();
-    await vault.generate('ed25519');
-    await vault.generate('ed25519');
+    const { scope, name } = await openVault();
+    await scope.generate('ed25519');
+    await scope.generate('ed25519');
 
     // Capture the generated private keys on their way into wrapKey; the test may export them, Vault never does.
     const seeds = await Promise.all(
@@ -128,8 +139,18 @@ describe('encryption at rest', () => {
       ciphertext: 'd55d737b56c3fa8ce5073edb26d288004d5391c63cbd8396372c973b2407e084d870fbe312c65fc813bc',
     };
     const bytes = (hex: string) => Uint8Array.fromHex(hex);
-    const privateKey = await crypto.subtle.importKey('pkcs8', bytes(v1.recipientPkcs8), { name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveKey']);
-    const sealed = { ephemeralPublicKey: bytes(v1.ephemeralPublicKey), iv: bytes(v1.iv), ciphertext: bytes(v1.ciphertext) };
+    const privateKey = await crypto.subtle.importKey(
+      'pkcs8',
+      bytes(v1.recipientPkcs8),
+      { name: 'ECDH', namedCurve: 'P-256' },
+      false,
+      ['deriveKey'],
+    );
+    const sealed = {
+      ephemeralPublicKey: bytes(v1.ephemeralPublicKey),
+      iv: bytes(v1.iv),
+      ciphertext: bytes(v1.ciphertext),
+    };
 
     const cipher = await unseal(privateKey, bytes(v1.recipientSpki), sealed, bytes(v1.aad));
     const plaintext = await crypto.subtle.decrypt(cipher.params, cipher.key, sealed.ciphertext);
@@ -137,14 +158,14 @@ describe('encryption at rest', () => {
   });
 
   test('decrypting needs the root key: with another private key in its place, sign fails closed', async () => {
-    const { vault, name } = await openVault();
-    const key = await vault.generate('ed25519');
+    const { scope, name } = await openVault();
+    const key = await scope.generate('ed25519');
     const header = await readHeader(name);
     const { privateKey } = await generateWrappingKey();
     await writeHeader(name, { ...header, protection: { ...header.protection, privateKey } });
 
     expect((await readHeader(name)).protection.privateKey).toBeInstanceOf(CryptoKey);
-    const error = await expectVaultError(vault.sign(key.id, message), 'corrupted');
+    const error = await expectVaultError(scope.sign(key.id, message), 'corrupted');
     expect(error.cause).toMatchObject({ name: 'OperationError' }); // AES-GCM authentication failed
   });
 });
@@ -172,8 +193,8 @@ describe('integrity', () => {
   ];
 
   test('the edit cases cover every stored field of a key record', async () => {
-    const { vault, name } = await openVault();
-    const record = await readKey(name, (await vault.generate('ed25519')).id);
+    const { scope, name } = await openVault();
+    const record = await readKey(name, scope.name, (await scope.generate('ed25519')).id);
     const fields = Object.entries(record).flatMap(([k, v]) =>
       k === 'sealed' ? Object.keys(v as object).map((s) => `sealed.${s}`) : [k],
     );
@@ -183,15 +204,15 @@ describe('integrity', () => {
 
   test.each(edits)('editing $field of a key record fails closed', async ({ edit, atList }) => {
     tickingClock();
-    const { vault, name } = await openVault();
-    const [target, other] = [await vault.generate('ed25519'), await vault.generate('ed25519')];
-    const edited = edit(await readKey(name, target.id), await readKey(name, other.id));
-    await replaceKey(name, target.id, edited);
+    const { scope, name } = await openVault();
+    const [target, other] = [await scope.generate('ed25519'), await scope.generate('ed25519')];
+    const edited = edit(await readKey(name, scope.name, target.id), await readKey(name, scope.name, other.id));
+    await replaceKey(name, scope.name, target.id, edited);
 
-    if (atList) await expectVaultError(vault.list(), 'corrupted');
-    else expect((await vault.list()).map((k) => k.id)).toEqual([target.id, other.id]); // not visible without decrypting
-    await expectVaultError(vault.sign(edited.id, message), 'corrupted');
-    await expect(vault.sign(other.id, message)).resolves.toMatchObject({ type: 'ed25519' });
+    if (atList) await expectVaultError(scope.list(), 'corrupted');
+    else expect((await scope.list()).map((k) => k.id)).toEqual([target.id, other.id]); // not visible without decrypting
+    await expectVaultError(scope.sign(edited.id, message), 'corrupted');
+    await expect(scope.sign(other.id, message)).resolves.toMatchObject({ type: 'ed25519' });
   });
 
   // Same value, different type: String() or a loose encoding would make these invisible to the id and AAD.
@@ -200,94 +221,111 @@ describe('integrity', () => {
     { label: 'createdAt as a string', edit: (r) => ({ ...r, createdAt: String(r.createdAt) }) },
     { label: 'publicKey as a plain Array', edit: (r) => ({ ...r, publicKey: Array.from(r.publicKey) }) },
     { label: 'publicKey as an Int8Array', edit: (r) => ({ ...r, publicKey: new Int8Array(r.publicKey.buffer) }) },
-    { label: 'sealed.iv as a plain Array', edit: (r) => ({ ...r, sealed: { ...r.sealed, iv: Array.from(r.sealed.iv) } }) },
+    {
+      label: 'sealed.iv as a plain Array',
+      edit: (r) => ({ ...r, sealed: { ...r.sealed, iv: Array.from(r.sealed.iv) } }),
+    },
     {
       label: 'sealed.ciphertext as an ArrayBuffer',
       edit: (r) => ({ ...r, sealed: { ...r.sealed, ciphertext: r.sealed.ciphertext.buffer } }),
     },
   ];
 
-  test.each(retypes)('changing a field type without changing its value fails closed at list: $label', async ({ edit }) => {
-    const { vault, name } = await openVault();
-    const key = await vault.generate('ed25519');
-    await replaceKey(name, key.id, edit(await readKey(name, key.id)));
+  test.each(retypes)(
+    'changing a field type without changing its value fails closed at list: $label',
+    async ({ edit }) => {
+      const { scope, name } = await openVault();
+      const key = await scope.generate('ed25519');
+      await replaceKey(name, scope.name, key.id, edit(await readKey(name, scope.name, key.id)));
 
-    await expectVaultError(vault.list(), 'corrupted');
-    await expectVaultError(vault.sign(key.id, message), 'corrupted');
-  });
+      await expectVaultError(scope.list(), 'corrupted');
+      await expectVaultError(scope.sign(key.id, message), 'corrupted');
+    },
+  );
 
   test('a negative createdAt is rejected at list: the canonical encoding has no negative integers', async () => {
-    const { vault, name } = await openVault();
-    const key = await vault.generate('ed25519');
-    await replaceKey(name, key.id, { ...(await readKey(name, key.id)), createdAt: -1 });
+    const { scope, name } = await openVault();
+    const key = await scope.generate('ed25519');
+    await replaceKey(name, scope.name, key.id, { ...(await readKey(name, scope.name, key.id)), createdAt: -1 });
 
-    await expectVaultError(vault.list(), 'corrupted');
+    await expectVaultError(scope.list(), 'corrupted');
   });
 
   test('a planted key whose public key has the wrong length is rejected at list', async () => {
-    const { vault, name } = await openVault();
-    await vault.generate('ed25519');
-    const id = await plantKey(name, crypto.getRandomValues(new Uint8Array(31)));
+    const { scope, name } = await openVault();
+    await scope.generate('ed25519');
+    const id = await plantKey(name, scope.name, crypto.getRandomValues(new Uint8Array(31)));
 
-    await expectVaultError(vault.list(), 'corrupted');
-    await expectVaultError(vault.sign(id, message), 'corrupted');
+    await expectVaultError(scope.list(), 'corrupted');
+    await expectVaultError(scope.sign(id, message), 'corrupted');
   });
 
   // WebKit 27.2 kills the page's process when Ed25519 verify gets such a key; documented as not protected.
   test.skipIf(server.browser === 'webkit')(
     'a planted key with a degenerate public key is listed like any added key, and sign fails closed',
     async () => {
-      const { vault, name } = await openVault();
-      await vault.generate('ed25519');
+      const { scope, name } = await openVault();
+      await scope.generate('ed25519');
       const identity = new Uint8Array(32);
       identity[0] = 1; // the identity point
-      const id = await plantKey(name, identity);
+      const id = await plantKey(name, scope.name, identity);
 
-      expect((await vault.list()).map((k) => k.id)).toContain(id);
-      await expectVaultError(vault.sign(id, message), 'corrupted');
+      expect((await scope.list()).map((k) => k.id)).toContain(id);
+      await expectVaultError(scope.sign(id, message), 'corrupted');
     },
   );
 
-  test('a key record moved to another scope is rejected there: its id binds the scope', async () => {
+  test('a key record moved to another scope fails closed: at list if its id is kept, at sign if it is recomputed', async () => {
     const { vault, name } = await openVault();
-    const record = await readKey(name, (await vault.generate('ed25519')).id);
-    await expect(parseKeyRecord(record)).resolves.toBeDefined();
-    await expectVaultError(parseKeyRecord({ ...record, scope: 'other' }), 'corrupted');
+    const [from, to] = [vault.scope('app-a'), vault.scope('app-b')];
+    const key = await from.generate('ed25519');
+    const record = await readKey(name, from.name, key.id);
+
+    // The id binds the scope, so list() sees the move without any secret.
+    await replaceKey(name, from.name, key.id, { ...record, scope: to.name });
+    await expectVaultError(to.list(), 'corrupted');
+
+    // An id recomputed for the new scope is consistent, so list() can't tell; the AAD binds the scope and id.
+    const id = await keyId(to.name, record.type, record.publicKey);
+    await replaceKey(name, to.name, key.id, { ...record, scope: to.name, id });
+    expect((await to.list()).map((k) => k.id)).toEqual([id]);
+    await expectVaultError(to.sign(id, message), 'corrupted');
+    expect(await from.list()).toEqual([]);
   });
 
   test('ciphertexts swapped between two key records fail closed', async () => {
-    const { vault, name } = await openVault();
-    const [a, b] = [await vault.generate('ed25519'), await vault.generate('ed25519')];
-    const [ra, rb] = [await readKey(name, a.id), await readKey(name, b.id)];
-    await replaceKey(name, a.id, { ...ra, sealed: rb.sealed });
-    await replaceKey(name, b.id, { ...rb, sealed: ra.sealed });
+    const { scope, name } = await openVault();
+    const [a, b] = [await scope.generate('ed25519'), await scope.generate('ed25519')];
+    const [ra, rb] = [await readKey(name, scope.name, a.id), await readKey(name, scope.name, b.id)];
+    await replaceKey(name, scope.name, a.id, { ...ra, sealed: rb.sealed });
+    await replaceKey(name, scope.name, b.id, { ...rb, sealed: ra.sealed });
 
-    await expectVaultError(vault.sign(a.id, message), 'corrupted');
-    await expectVaultError(vault.sign(b.id, message), 'corrupted');
+    await expectVaultError(scope.sign(a.id, message), 'corrupted');
+    await expectVaultError(scope.sign(b.id, message), 'corrupted');
   });
 
   test('a key an attacker sealed to the public wrapping key decrypts, but is rejected instead of used', async () => {
-    const { vault, name } = await openVault();
-    const key = await vault.generate('ed25519');
-    const [header, record] = [await readHeader(name), await readKey(name, key.id)];
+    const { scope, name } = await openVault();
+    const key = await scope.generate('ed25519');
+    const [header, record] = [await readHeader(name), await readKey(name, scope.name, key.id)];
 
     // Needs no secret: the wrapping key is public and the associated data is the record's own fields.
     const attacker = await ed25519.generate();
     const sealed = await seal(header.wrappingPublicKey, keyAad(record), attacker.seal);
-    await replaceKey(name, key.id, { ...record, sealed });
+    await replaceKey(name, scope.name, key.id, { ...record, sealed });
 
     const cipher = await unseal(header.protection.privateKey, header.wrappingPublicKey, sealed, keyAad(record));
     await expect(ed25519.sign(sealed.ciphertext, cipher, message)).resolves.toHaveLength(64);
-    await expectVaultError(vault.sign(key.id, message), 'corrupted');
+    await expectVaultError(scope.sign(key.id, message), 'corrupted');
   });
 
   test('a tampered wrapping public key makes generate fail closed, not with a raw DataError', async () => {
-    const { vault, name } = await openVault();
-    await vault.generate('ed25519');
+    const { scope, name } = await openVault();
+    await scope.generate('ed25519');
     const header = await readHeader(name);
     await writeHeader(name, { ...header, wrappingPublicKey: flipBit(header.wrappingPublicKey) });
 
-    const error = await expectVaultError(vault.generate('ed25519'), 'corrupted');
+    const error = await expectVaultError(scope.generate('ed25519'), 'corrupted');
     expect(error.cause).toMatchObject({ name: 'DataError' });
   });
 
@@ -297,27 +335,32 @@ describe('integrity', () => {
     // Flipping a bit of the y coordinate leaves the point off the curve.
     await expect(importPublicKey(flipBit(publicKey))).rejects.toMatchObject({ name: 'DataError' });
 
-    const { vault, name } = await openVault();
-    const key = await vault.generate('ed25519');
-    const record = await readKey(name, key.id);
+    const { scope, name } = await openVault();
+    const key = await scope.generate('ed25519');
+    const record = await readKey(name, scope.name, key.id);
     const ephemeralPublicKey = flipBit(record.sealed.ephemeralPublicKey);
-    await replaceKey(name, key.id, { ...record, sealed: { ...record.sealed, ephemeralPublicKey } });
-    const error = await expectVaultError(vault.sign(key.id, message), 'corrupted');
+    await replaceKey(name, scope.name, key.id, { ...record, sealed: { ...record.sealed, ephemeralPublicKey } });
+    const error = await expectVaultError(scope.sign(key.id, message), 'corrupted');
     expect(error.cause).toMatchObject({ name: 'DataError' });
   });
 });
 
 describe('format versioning', () => {
-  const versions: [label: string, v: unknown][] = [['2', 2], ["'1' (a string)", '1'], ['true', true], ['missing', undefined]];
+  const versions: [label: string, v: unknown][] = [
+    ['2', 2],
+    ["'1' (a string)", '1'],
+    ['true', true],
+    ['missing', undefined],
+  ];
 
   test.each(versions)('a header with format version %s is rejected, not coerced', async (_, v) => {
-    const { vault, name } = await openVault();
-    const key = await vault.generate('ed25519');
+    const { scope, name } = await openVault();
+    const key = await scope.generate('ed25519');
     await writeHeader(name, { ...(await readHeader(name)), v });
 
-    await expectVaultError(vault.list(), 'corrupted');
-    await expectVaultError(vault.sign(key.id, message), 'corrupted');
-    await expectVaultError(vault.generate('ed25519'), 'corrupted');
+    await expectVaultError(scope.list(), 'corrupted');
+    await expectVaultError(scope.sign(key.id, message), 'corrupted');
+    await expectVaultError(scope.generate('ed25519'), 'corrupted');
   });
 
   test('a database written by a newer format is rejected with incompatible', async () => {
@@ -334,13 +377,13 @@ describe('format versioning', () => {
   });
 
   test('an open vault never blocks a newer format, and refuses to work afterwards', async () => {
-    const { vault, name } = await openVault();
-    await vault.generate('ed25519');
+    const { scope, name } = await openVault();
+    await scope.generate('ed25519');
 
     const newer = indexedDB.open(name, 2); // `done` rejects if this is blocked by the vault's connection
     newer.onupgradeneeded = () => newer.result.createObjectStore('future');
     (await done(newer)).close();
 
-    await expectVaultError(vault.list(), 'incompatible');
+    await expectVaultError(scope.list(), 'incompatible');
   });
 });
