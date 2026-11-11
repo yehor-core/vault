@@ -19,9 +19,9 @@ Vault is a browser-native private-key store on IndexedDB. An application calls i
 | No plaintext keys at rest | Built (unprotected mode) | §3.1, §4.1 |
 | Optional, upgradeable protection | Format ready; upgrade not built yet | §3.1, §5 |
 | Cheap to add, gated to use | Adding needs only the public wrapping key | §3.1 |
-| Many key types, one model | ed25519; a new sealed key type is one module and one registry entry | §7.5 |
+| Many key types, one model | ed25519 and secp256k1; a new sealed key type is one module and one registry entry | §7.5 |
 | Correct under concurrency and failure | Atomic writes, fail-closed reads; multi-tab not tested yet | §4.2, §6 |
-| A small, idiomatic domain API | Built for unprotected ed25519 keys in named scopes | §7 |
+| A small, idiomatic domain API | Built for unprotected ed25519 and secp256k1 keys in named scopes | §7 |
 
 ## 2. Threat model
 
@@ -29,7 +29,7 @@ Vault is a browser-native private-key store on IndexedDB. An application calls i
 
 | Asset | Secret? |
 |---|---|
-| Private key material (ed25519 now; secp256k1 later) | Yes. Never leaves Vault through the API. |
+| Private key material (ed25519, secp256k1) | Yes. Never leaves Vault through the API. |
 | Wrapping private key: decrypts every private key | Yes. In unprotected mode it is the root secret. |
 | Integrity of key records: Vault signs only with the key whose public key it lists | — |
 | Protection state (unprotected or passkey-protected) | Not built yet |
@@ -53,12 +53,12 @@ Trusted: the browser, its WebCrypto and IndexedDB implementations, the OS, and o
 |---|---|---|---|---|
 | Copy of the browser profile or disk | Unprotected | Private keys are stored only as AES-256-GCM ciphertext. The only stored secret is the wrapping private key, a non-extractable CryptoKey held by the browser, and without it nothing decrypts. | **Not protected against a profile copy.** The browser keeps the root key's bytes in the profile, so the copy, opened in the same browser or parsed, recovers every key. | `storage › no private key bytes are stored: only ciphertext and a non-extractable root key`, `› decrypting needs the root key…` |
 | | Protected | Not built yet | | |
-| Records added or replaced by anyone who can write to storage | Both | `list()`, with no secret, rejects a field of the wrong type or length, and an edited id, type, public key or version. A record moved to another scope fails closed: `list()` rejects it there if its id was kept, because the id binds the scope; if the id was recomputed for the new scope, `sign()` rejects it, because the AAD binds scope and id. `sign()` rejects an edit to any other field: a changed byte, swapped ciphertexts, an off-curve ephemeral key. It also rejects a key the attacker sealed to the public wrapping key: that ciphertext decrypts cleanly, so the signature check before returning catches it. Key records without a header are never treated as a new vault. All of these fail with `corrupted`. | A complete new key record needs no secret, so an added key can't be told from a real one. Deleting records isn't detected. Edits to createdAt and to the ciphertext surface only when the key is used. A replaced header is not detected at list time (§11). **In WebKit, signing with a planted key whose public key is degenerate (e.g. the identity point) crashes the tab instead of failing with `corrupted`: not protected** (§8). | `storage › editing <field> of a key record fails closed`, `› the edit cases cover every stored field…`, `› changing a field type without changing its value…`, `› a planted key whose public key is not valid for its type…`, `› a planted key with a degenerate public key…` (Chromium, Firefox), `› ciphertexts swapped…`, `› a key an attacker sealed…`, `› an off-curve ephemeral public key…`, `› a key record moved to another scope fails closed…`, `vault › key records without a vault header are corrupted everywhere…` |
+| Records added or replaced by anyone who can write to storage | Both | `list()`, with no secret, rejects a field of the wrong type or length, and an edited id, type, public key or version. A record moved to another scope fails closed: `list()` rejects it there if its id was kept, because the id binds the scope; if the id was recomputed for the new scope, `sign()` rejects it, because the AAD binds scope and id. `sign()` rejects an edit to any other field: a changed byte, swapped ciphertexts, an off-curve ephemeral key. It also rejects a key the attacker sealed to the public wrapping key: that ciphertext decrypts cleanly, so the signature check before returning catches it. A sealed secp256k1 value that is not a valid 32-byte scalar is rejected by Vault's own check before it is used. Key records without a header are never treated as a new vault. All of these fail with `corrupted`. | A complete new key record needs no secret, so an added key can't be told from a real one. Deleting records isn't detected. Edits to createdAt and to the ciphertext surface only when the key is used. A replaced header is not detected at list time (§11). **In WebKit, signing with a planted key whose public key is degenerate (e.g. the identity point) crashes the tab instead of failing with `corrupted`: not protected** (§8). | `storage › editing <field> of a key record fails closed`, `› the edit cases cover every stored field…`, `› changing a field type without changing its value…`, `› a planted key whose public key is not valid for its type…`, `› a planted key with a degenerate public key…` (Chromium, Firefox), `› ciphertexts swapped…`, `› a key an attacker sealed…`, `› an off-curve ephemeral public key…`, `› a key record moved to another scope fails closed…`, `storage › secp256k1 › a planted sealed value that is not a valid scalar is corrupted at sign: <case>`, `vault › key records without a vault header are corrupted everywhere…` |
 | Older storage snapshot restored | Both | — | **Not detected.** A consistent older copy is a valid state: keys deleted since then reappear, keys added since then vanish. IndexedDB is the only store, so there is nowhere to anchor a counter. | not protected |
 | Malicious script in the same origin while unlocked | Unprotected | The API never returns private key bytes. Vault keeps no secret in memory between calls. A `Scope` has no path to its `Vault`, so code handed only a `Scope` can't wipe the vault or open another scope. | **Not protected.** The script can sign with every key, and can open the database and use the root key to unwrap every key as extractable, which exfiltrates them. **Scopes group keys; they do not isolate same-origin code:** any same-origin code can call `vault.scope(name)` with any name, or read IndexedDB directly. Keeping other-origin consumers apart is the embedding layer's job (§9). | `src/scope.ts` (no export method), `vault › a Scope has no path to its Vault…` |
 | Lost, deleted or replaced passkey (protection passkey) | Protected | Not built yet | | |
 | Lost, deleted or replaced passkey (passkey key) | Both | Not built yet | | |
-| Secrets in memory | Both | Ed25519 private keys exist only as CryptoKey objects: sealed with `wrapKey`, opened with `unwrapKey` into a non-extractable key, never as JS bytes. Per-key AES keys and the ECDH result stay inside `deriveKey`. A key type that holds secrets in JS buffers erases them once a generated key is stored or abandoned: `generate` calls the type's `erase` on success and on every failure path. | JS can't zero memory, and the browser may hold internal copies. A CryptoKey lives until garbage collection. | `src/key-types/ed25519.ts`, `src/seal.ts`; `storage › a generated key has its secrets erased once, after it is stored`, `› a generated key has its secrets erased when generate fails: <case>` |
+| Secrets in memory | Both | Ed25519 private keys exist only as CryptoKey objects: sealed with `wrapKey`, opened with `unwrapKey` into a non-extractable key, never as JS bytes. Per-key AES keys and the ECDH result stay inside `deriveKey`. A key type that holds secrets in JS buffers erases them once a generated key is stored or abandoned: `generate` calls the type's `erase` on success and on every failure path. secp256k1 zeroes every secret buffer Vault owns: the 48-byte key-generation seed as soon as the scalar is derived from it, the scalar when `erase` runs, and the decrypted scalar when `sign` returns or fails. | **The secp256k1 private key exists as JS bytes during `generate` and `sign`**, and the curve library's internal copies (bigints, hash state) are not zeroed: not protected. JS can't zero memory, and the browser may hold internal copies. A CryptoKey lives until garbage collection. | `src/key-types/ed25519.ts`, `src/key-types/secp256k1.ts`, `src/seal.ts`; `storage › a generated key has its secrets erased once, after it is stored`, `› a generated key has its secrets erased when generate fails: <case>`, `storage › secp256k1 › generate erases the seed and the scalar it owns, also when the write fails`, `› sign erases the decrypted scalar, also when it is rejected` |
 | Storage evicted by the browser | Both | An empty database behaves as a new vault. | Can't be told apart from a vault that was never used or was wiped. Requesting persistent storage: not decided yet. | `vault › opening and listing write nothing; the first generate creates the vault` |
 | Crash or closed tab mid-operation | Both | Every multi-record change is one IndexedDB transaction, so a crash leaves the old state or the new one. A transaction that aborts, even after its body has run, fails the call with `unavailable` and writes nothing. | A real process crash is not simulated; aborted transactions are. | `vault › the first generate writes header and key atomically…`, `› a write that aborts at commit…`, `› wipe is one transaction…`, `src/db.ts` `transact` |
 
@@ -82,7 +82,8 @@ vault wrapping key pair — ECDH P-256, one per vault, in the header record
 
 private key (one per key record), sealed by ECIES:
   ephemeral P-256 key pair → ECDH with the wrapping public key → HKDF-SHA-256 (info = both public keys)
-  → AES-256-GCM (random 96-bit IV, AAD = every stored field of the record) → wrapKey('pkcs8')
+  → AES-256-GCM (random 96-bit IV, AAD = every stored field of the record)
+  → by key type: ed25519 wrapKey('pkcs8'); secp256k1 encrypt(the raw 32-byte scalar)
 ```
 
 - **Unprotected mode is protected only by the browser.** The root is a CryptoKey that JS can use but not read. That stops a leaked record dump or log from revealing keys, but not a profile copy or same-origin code (§2.3).
@@ -106,10 +107,13 @@ What Vault stores about a passkey key and what it can do without that record.
 | Key derivation | HKDF-SHA-256 over the ECDH output | WebCrypto | Native; done with `deriveKey`, so the shared secret never becomes JS bytes |
 | Point validation | SPKI import | WebCrypto | WebKit accepts off-curve points in `raw` and `jwk` import, but every engine rejects them in `spki`: `storage › an off-curve ephemeral public key is rejected…` |
 | ed25519 signatures | Ed25519 (RFC 8032) | WebCrypto | Native in all three engines |
+| secp256k1 keys and signatures | ECDSA over SHA-256, RFC 6979, low-S | `@noble/curves` 2.3.0 | No engine's WebCrypto has secp256k1 |
 | Key ids | SHA-256 | WebCrypto | Native |
-| Randomness | `getRandomValues`, `generateKey` | WebCrypto | Native |
+| Randomness | `getRandomValues` (also the secp256k1 seed), `generateKey` | WebCrypto | Native |
 
-There are no third-party cryptographic dependencies yet. The sealing construction (`src/seal.ts`) composes native primitives in the shape of HPKE base mode: a one-time key per seal, both public keys in the KDF context, and AEAD with associated data. It is not wire-compatible with HPKE. A value sealed by the v1 code is kept as a known-answer test, `storage › a value sealed by format v1 still opens…`. Any change to the derivation fails that test, even when it alters `seal` and `unseal` alike and every round trip still passes.
+**The one third-party cryptographic dependency is `@noble/curves`, for secp256k1 only.** No engine's WebCrypto has the curve, and Vault does no hand-rolled crypto. It is pinned exactly to 2.3.0, its independently audited release (Trail of Bits, August 2026, full scope); the newer 2.4.0 has only AI-assisted self-audits, and its hardening concerns misuse that Vault's calls don't make. Its one dependency, `@noble/hashes`, arrives through its exact pin as 2.3.0. `package-lock.json` carries the integrity hash of both, and `npm audit signatures` verifies their registry signatures. Every option of every call is passed explicitly (`src/key-types/secp256k1.ts`), so a changed library default can't change what a `secp256k1` signature is.
+
+The sealing construction (`src/seal.ts`) composes native primitives in the shape of HPKE base mode: a one-time key per seal, both public keys in the KDF context, and AEAD with associated data. It is not wire-compatible with HPKE. A value sealed by the v1 code is kept as a known-answer test, `storage › a value sealed by format v1 still opens…`. Any change to the derivation fails that test, even when it alters `seal` and `unseal` alike and every round trip still passes.
 
 ## 4. Storage layout
 
@@ -140,9 +144,9 @@ Code layout:
 | `v` is the number 1, never coerced (header and key records) | every read | `corrupted`: `storage › a header with format version 2 / '1' / true / undefined…`, `› editing v…`, `› changing a field type…: v as the string '1'` |
 | Header fields have their exact types: wrapping public key bytes, a known protection kind, a CryptoKey root. A header key whose value is `undefined` (or `null`, which WebKit returns for an unreadable value) is malformed, not absent. | `list`, `generate`, `sign` | `corrupted`: `records › a malformed header field…`, `vault › a header stored as undefined…`, `storage › a tampered wrapping public key makes generate fail closed…` |
 | Key records without a header mean a deleted header, never a new vault: only `wipe()` works | `list`, `generate`, `sign` (`src/storage.ts` `readHeader`) | `corrupted`: `vault › key records without a vault header are corrupted everywhere…` |
-| Key record fields have their exact types: a well-formed scope name of 1 to 1024 code units, an id string, a registered type, the public key a `Uint8Array` that passes its type's public-key check (ed25519: 32 bytes), createdAt a safe non-negative integer, sealed fields `Uint8Array`, a 12-byte IV | `list`, `sign`, without any secret | `corrupted`: `records › a malformed key record field…`, `storage › changing a field type…`, `› a negative createdAt…`, `› a planted key whose public key is not valid for its type…` |
+| Key record fields have their exact types: a well-formed scope name of 1 to 1024 code units, an id string, a registered type, the public key a `Uint8Array` that passes its type's public-key check (ed25519: 32 bytes; secp256k1: a 33-byte compressed point on the curve), createdAt a safe non-negative integer, sealed fields `Uint8Array`, a 12-byte IV | `list`, `sign`, without any secret | `corrupted`: `records › a malformed key record field…`, `storage › changing a field type…`, `› a negative createdAt…`, `› a planted key whose public key is not valid for its type…` |
 | Id matches the hash of scope, type and public key | `list`, `sign`, without any secret | `corrupted`: `storage › editing id / type / publicKey…` |
-| Ephemeral key imports as SPKI → AES-GCM decrypt with AAD → sign → verify against the stored public key | `sign` | `corrupted`: `storage › an off-curve ephemeral public key…`, `› ciphertexts swapped…`, `› a key an attacker sealed…`, `› decrypting needs the root key…` |
+| Ephemeral key imports as SPKI → AES-GCM decrypt with AAD → (secp256k1: the plaintext is exactly 32 bytes and 1 ≤ d < n) → sign → verify against the stored public key | `sign` | `corrupted`: `storage › an off-curve ephemeral public key…`, `› ciphertexts swapped…`, `› a key an attacker sealed…`, `› decrypting needs the root key…`, `storage › secp256k1 › a planted sealed value that is not a valid scalar…` |
 | Only the fields Vault writes: any other own field on the header, its protection, a key record or its sealed part is rejected | `list`, `generate`, `sign` | `corrupted` ("`<record>: unexpected field <name>`"): `records › an unexpected extra field on …`, `› an extra field fails closed through the API…` |
 | A version-1 database has Vault's stores | `open` | `corrupted`: `vault › a database without Vault stores…` |
 
@@ -234,14 +238,14 @@ interface Scope {
   sign<K extends KeyInfo>(key: K, data: Uint8Array): Promise<Signature<K['type']>>;
   delete(key: KeyInfo): Promise<void>;                // missing key: no-op
 }
-type KeyTypeName = 'ed25519';
+type KeyTypeName = 'ed25519' | 'secp256k1';
 // One member per key type, derived from the registry:
-type KeyInfo = { id: string; scope: string; type: 'ed25519'; publicKey: Uint8Array; createdAt: Date };
-type Signature<T extends KeyTypeName = KeyTypeName> = { type: 'ed25519'; bytes: Uint8Array };   // the member for T
+type KeyInfo = { id: string; scope: string; type: KeyTypeName; publicKey: Uint8Array; createdAt: Date };
+type Signature<T extends KeyTypeName = KeyTypeName> = { type: T; bytes: Uint8Array };   // the member for T
 class VaultError extends Error { code: VaultErrorCode; retryable: boolean }
 ```
 
-How the types prevent misuse: every key operation is a method of a `Scope`, so a key operation without a scope can't be written. A `Scope` exposes its name and the four key operations, nothing vault-wide, and its name can't be reassigned: `vault › a Scope has no path to its Vault…`. `generate` accepts only registered key type names. `sign` and `delete` take the key's public information as `generate` or `list` returned it, so an application never handles ids by hand, and `sign` returns the signature member of the key's type. Vault trusts nothing in that argument: it reads only the id, scope and type, and reads the key itself from storage, so an edited public key or creation time changes nothing: `vault › keys › only the id, scope and type of the argument count…`. At run time any object with these three fields works, a structured clone included: `vault › keys › sign and delete take the public information as returned…`. A key passed to a scope it doesn't belong to is a `TypeError`, and the key is neither signed with nor deleted: `vault › scopes › a key passed to another scope is a TypeError…`. `Signature` is a union discriminated by `type`, so a key type with a different signature shape (a passkey assertion) is another member, not a breaking change. There is no method that returns private key material.
+How the types prevent misuse: every key operation is a method of a `Scope`, so a key operation without a scope can't be written. A `Scope` exposes its name and the four key operations, nothing vault-wide, and its name can't be reassigned: `vault › a Scope has no path to its Vault…`. `generate` accepts only registered key type names. `sign` and `delete` take the key's public information as `generate` or `list` returned it, so an application never handles ids by hand, and `sign` returns the signature member of the key's type: `vault › the type of a signature follows the type of the key passed to sign`. Vault trusts nothing in that argument: it reads only the id, scope and type, and reads the key itself from storage, so an edited public key or creation time changes nothing: `vault › keys › only the id, scope and type of the argument count…`. At run time any object with these three fields works, a structured clone included: `vault › keys › sign and delete take the public information as returned…`. A key passed to a scope it doesn't belong to is a `TypeError`, and the key is neither signed with nor deleted: `vault › scopes › a key passed to another scope is a TypeError…`. `Signature` is a union discriminated by `type`, so a key type with a different signature shape (a passkey assertion) is another member, not a breaking change. There is no method that returns private key material.
 
 ### 7.2 Usage examples
 
@@ -259,6 +263,9 @@ const signature = await keys.sign(key, data);          // pass the KeyInfo itsel
 // Anyone with the public key verifies, without Vault:
 const publicKey = await crypto.subtle.importKey('raw', key.publicKey, 'Ed25519', false, ['verify']);
 await crypto.subtle.verify('Ed25519', publicKey, signature.bytes, data);   // true
+
+const k1 = await keys.generate('secp256k1');           // publicKey: 33-byte compressed SEC1 point
+const k1Signature = await keys.sign(k1, data);         // 64 bytes r ‖ s; verify with OpenSSL, `dgst -sha256`
 
 // Kept only an id? Find its key first:
 const saved = (await keys.list()).find((k) => k.id === savedId);
@@ -313,8 +320,11 @@ interface GeneratedKey {
 | Key type | Public key | Signature |
 |---|---|---|
 | `ed25519` | 32 bytes, RFC 8032 encoding | 64 bytes, RFC 8032, over the exact bytes passed to `sign` |
+| `secp256k1` | 33 bytes, compressed SEC1 point, checked to be on the curve | 64 bytes r ‖ s: ECDSA over SHA-256 of the bytes passed to `sign`, RFC 6979 nonces, low-S, no recovery id |
 
-The core hands the type an AES-GCM key bound to the record (`Cipher`), and the type decides how its private key is sealed: ed25519 uses `wrapKey` (`src/key-types/ed25519.ts`), so it has no secret buffer to erase.
+The core hands the type an AES-GCM key bound to the record (`Cipher`), and the type decides how its private key is sealed: ed25519 uses `wrapKey` (`src/key-types/ed25519.ts`), so it has no secret buffer to erase. secp256k1 encrypts its raw 32-byte scalar with `encrypt` and erases it (`src/key-types/secp256k1.ts`); the type name means exactly this scheme, and another scheme on the curve would be another type.
+
+secp256k1 is pinned by known answers. A published deterministic-ECDSA vector (bitcoinjs-lib's `ecdsa.json`, private key 1) is reproduced exactly through the public API, from a record planted with that private key: `storage › secp256k1 › a published deterministic-ECDSA vector is reproduced exactly`. A stored secp256k1 record lists and gives a fixed signature: `records › format: secp256k1 known answer › a stored secp256k1 key record lists and gives the expected signature`. Every signature is low-S, checked with plain integer arithmetic, not the curve library: `vault › every secp256k1 signature is low-S, checked without the curve library`. OpenSSL verifies a demo signature in Node: `e2e › demo creates, lists, signs, deletes and wipes keys of each type…`.
 
 The claim holds for sealed key types only: the core may assume that every key record has a sealed part and every signature is a type name with bytes. Passkey keys have neither, so adding them widens the interface and changes the core once. One caveat: older builds reject a record of a type they don't know (§11).
 
@@ -324,7 +334,8 @@ Storage and crypto facts this design depends on, measured in the engines Playwri
 
 | Fact | Chromium | Firefox | WebKit | Consequence |
 |---|---|---|---|---|
-| Ed25519, ECDH P-256, HKDF, AES-GCM `wrapKey`/`unwrapKey` | ✓ | ✓ | ✓ | All crypto is WebCrypto |
+| Ed25519, ECDH P-256, HKDF, AES-GCM `wrapKey`/`unwrapKey` | ✓ | ✓ | ✓ | All crypto is WebCrypto, except secp256k1 |
+| secp256k1 in WebCrypto | ✗ | ✗ | ✗ | secp256k1 runs on `@noble/curves` (§3.3) |
 | `Uint8Array.prototype.toBase64` with the `base64url` alphabet (ES2026) | ✓ | ✓ | ✓ | Key ids use it; older engines without it are not supported |
 | X25519 CryptoKey survives IndexedDB | ✓ | ✓ | ✗ (reads back `null`) | P-256 for the wrapping key |
 | Off-curve P-256 point rejected by `raw` / `jwk` import | ✓ | ✓ | ✗ | Points are imported only as SPKI |
@@ -355,6 +366,8 @@ Scopes are what an embedding layer builds on: it chooses the scope from the send
 | Versioning | Schema version = format version, and `v` in every record | Version in the header only | Re-encrypting migrations can't run in the upgrade callback; per-record versions let them run lazily | One field per record |
 | Concurrency | Crypto first, then one transaction that re-checks the header | Web Locks around read → crypto → write | IndexedDB alone gives atomicity and serialization; no lock is ever held across a passkey prompt | Crypto is wasted on a conflict |
 | `sign` and `delete` argument | The key's public information (`KeyInfo`, carrying its scope); Vault reads id, scope and type and re-reads the record | `sign(id, data)`, `delete(id)` | With opaque hashed ids, `sign(id)` can't tell a passkey key without reading IndexedDB first, which spends the user gesture (S5); the signature type follows the key type; a key used through the wrong scope is a loud error | A caller who kept only an id calls `list()` first |
+| secp256k1 scheme | ECDSA over SHA-256 of the data, RFC 6979 nonces, low-S, 64-byte r ‖ s; verify after sign | ECDSA over a caller-supplied 32-byte digest plus a recovery id; BIP-340 Schnorr; hedged nonces | Same shape as ed25519 (it signs the message); OpenSSL verifies it; determinism allows known answers, and verify-after-sign withholds a faulted signature, which is what hedged nonces defend against | Not directly usable where a protocol fixes another digest (Ethereum keccak, Bitcoin double SHA-256) or needs a recovery id |
+| secp256k1 library | `@noble/curves` 2.3.0, pinned exactly | 2.4.0, the latest | 2.3.0 is the most recent independently audited release | 2.4.0's misuse hardening, which Vault's calls don't need |
 | `sign` result | Union discriminated by `type` | Bare `Uint8Array`; key handles with methods | Passkey assertions need more than signature bytes; handles go stale across tabs | Callers narrow on `type` |
 | Scopes | `vault.scope(name)` returns a `Scope` with the key operations; `Vault` keeps `open`, `scope`, `wipe`, `close`; all scopes share one connection and wrapping key pair | A `scope` option on every call, defaulting to `'default'` | A call that forgets its scope could be written, and would silently use the shared default; code handed a vault can always wipe it | Two classes instead of one |
 | | | One scope per `Vault.open()` | Each instance would need its own unlock once protection exists, or a hidden global shared between instances | — |
@@ -381,4 +394,6 @@ Scopes are what an embedding layer builds on: it chooses the scope from the send
 - **Scopes group keys; they do not isolate same-origin code** (§2.3). Any same-origin code can open any scope.
 - **The scopes of a vault can't be listed, and one scope can't be cleared on its own**: `wipe()` is vault-wide, and a scope's keys go one `delete` at a time.
 - **`sign` and `delete` take a key's public information, not an id**: a caller who kept only an id calls `list()` first and passes the matching `KeyInfo`.
-- Only the ed25519 key type exists; there are no labels or metadata.
+- **The secp256k1 private key exists as JS bytes during `generate` and `sign`.** Vault zeroes the buffers it owns; the curve library's internal copies are not zeroed (§2.3).
+- **secp256k1 signs SHA-256 of the data and returns no recovery id**, so it is not directly usable where a protocol fixes another digest or needs a recovery id.
+- There are no labels or metadata.

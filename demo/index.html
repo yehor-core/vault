@@ -45,7 +45,14 @@
     <p id="status">Loading…</p>
 
     <p>
-      <button id="generate">Generate ed25519 key</button>
+      <label
+        >Key type
+        <select id="type">
+          <option>ed25519</option>
+          <option>secp256k1</option>
+        </select></label
+      >
+      <button id="generate">Generate key</button>
       <button id="wipe">Wipe vault</button>
     </p>
     <p>
@@ -66,7 +73,7 @@
     </table>
 
     <h2>Last signature</h2>
-    <p>Verified with WebCrypto and the public key only, outside Vault.</p>
+    <p>Verified with the public key only, outside Vault: ed25519 with WebCrypto, secp256k1 with @noble/curves.</p>
     <pre id="output">—</pre>
 
     <script type="module" src="./main.ts"></script>

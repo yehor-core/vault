@@ -1,5 +1,6 @@
 import type { Bytes } from './bytes.ts';
 import { ed25519 } from './key-types/ed25519.ts';
+import { secp256k1 } from './key-types/secp256k1.ts';
 import type { Cipher } from './seal.ts';
 
 /**
@@ -24,7 +25,7 @@ export interface GeneratedKey {
   erase(): void;
 }
 
-export const keyTypes = { ed25519 } satisfies Record<string, KeyType>;
+export const keyTypes = { ed25519, secp256k1 } satisfies Record<string, KeyType>;
 
 export type KeyTypeName = keyof typeof keyTypes;
 

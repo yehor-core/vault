@@ -2,7 +2,7 @@
 
 A browser-native private-key store on top of IndexedDB. Design: [DESIGN.md](DESIGN.md).
 
-> Status: S2 in progress. Unprotected vault with ed25519 keys in named scopes: generate, list, sign, delete per scope; wipe for the whole vault. Keys are encrypted at rest in a versioned storage format, and errors are classified. Not built yet: secp256k1, labels, multi-tab notifications, passkey keys, passkey protection.
+> Status: S2 in progress. Unprotected vault with ed25519 and secp256k1 keys in named scopes: generate, list, sign, delete per scope; wipe for the whole vault. Keys are encrypted at rest in a versioned storage format, and errors are classified. Not built yet: labels, multi-tab notifications, passkey keys, passkey protection.
 
 ## Setup
 
@@ -18,7 +18,7 @@ npx playwright install --with-deps chromium firefox webkit   # --with-deps insta
 | Command | What it does |
 |---|---|
 | `npm run build` | Compiles the library to `dist/` (ES modules and `.d.ts`) |
-| `npm run demo` | Serves the demo page at http://localhost:5173: generate, list, sign (verified with WebCrypto outside Vault), delete in one fixed scope, `demo`; wipe |
+| `npm run demo` | Serves the demo page at http://localhost:5173: generate a key of either type, list, sign (verified outside Vault: ed25519 with WebCrypto, secp256k1 with `@noble/curves`), delete in one fixed scope, `demo`; wipe |
 | `npm run typecheck` | Type checks browser code (`tsconfig.json`, no Node globals) and Node-side config, scripts and e2e tests (`tsconfig.node.json`) |
 | `npm run lint` | oxlint: the coding-standards rules marked _(oxlint)_ (`.oxlintrc.json`) |
 | `npm run check:refs` | Checks that every test cited in `DESIGN.md` and `README.md` (`storage › …`) still exists |
@@ -37,17 +37,18 @@ const vault = await Vault.open();
 const keys = vault.scope('https://app.example');   // a named group of keys; synchronous, no I/O
 const key = await keys.generate('ed25519');
 const signature = await keys.sign(key, new TextEncoder().encode('hello')); // the KeyInfo itself, not its id
+const k1 = await keys.generate('secp256k1');      // ECDSA over SHA-256, low-S, 64-byte r ‖ s
 ```
 
 ## Browser support
 
-| Engine | Version tested (Playwright 1.64.1) | Unit + e2e suites | Vault (unprotected, ed25519) | Passkey features |
+| Engine | Version tested (Playwright 1.64.1) | Unit + e2e suites | Vault (unprotected, ed25519 and secp256k1) | Passkey features |
 |---|---|---|---|---|
 | Chromium | 156 | ✓ | ✓ | not built yet |
 | Firefox | 157 | ✓ | ✓ | not built yet |
 | WebKit | 27.2 | ✓ | ✓ | not built yet |
 
-Needs WebCrypto Ed25519, ECDH P-256, HKDF and AES-GCM, IndexedDB and `Uint8Array.prototype.toBase64` (ES2026), in a secure context. WebKit (Playwright, Linux) has four quirks that shape the design; see DESIGN.md §8:
+Needs WebCrypto Ed25519, ECDH P-256, HKDF and AES-GCM, IndexedDB and `Uint8Array.prototype.toBase64` (ES2026), in a secure context. secp256k1 runs on `@noble/curves` 2.3.0, pinned exactly (DESIGN.md §3.3). WebKit (Playwright, Linux) has four quirks that shape the design; see DESIGN.md §8:
 - It loses stored X25519 keys.
 - Its point import accepts off-curve points.
 - Its Ed25519 key generation fails about 0.7% of the time (Vault retries it).
@@ -55,7 +56,7 @@ Needs WebCrypto Ed25519, ECDH P-256, HKDF and AES-GCM, IndexedDB and `Uint8Array
 
 ## Property → test
 
-Test references: `<name> ›` cites `test/unit/<name>.test.ts`, `e2e ›` cites `test/e2e/`; a middle segment names the `describe` group. `npm run check:refs` checks that every cited test exists. Every unit test runs in all three engines, except one test skipped in WebKit, as noted in its row. Every test about keys runs once per registered key type. Each row was break-checked: the guarding code was broken once and the test went red in every listed engine. Where two guards protect one property, both were broken together. Exception: breaking the SPKI guard turns its test red only in WebKit, the only engine whose `raw` import accepts off-curve points. Not break-checked: the two platform rows, "Keys persist" and "Opening and listing write nothing", which are functional checks.
+Test references: `<name> ›` cites `test/unit/<name>.test.ts`, `e2e ›` cites `test/e2e/`; a middle segment names the `describe` group. `npm run check:refs` checks that every cited test exists. Every unit test runs in all three engines, except one test skipped in WebKit, as noted in its row. Every test about keys runs once per registered key type. Each row was break-checked: the guarding code was broken once and the test went red in every listed engine. Where two guards protect one property, both were broken together. The type row was broken in `src/scope.ts` and went red in `npm run typecheck`. Exception: breaking the SPKI guard turns its test red only in WebKit, the only engine whose `raw` import accepts off-curve points. Not break-checked: the two platform rows, "Keys persist" and "Opening and listing write nothing", which are functional checks.
 
 | Property | Test | Engines |
 |---|---|---|
@@ -67,7 +68,7 @@ Test references: `<name> ›` cites `test/unit/<name>.test.ts`, `e2e ›` cites 
 | Format v1 is pinned: key id and AAD of fixed inputs, a key record written by the v1 code still lists and signs, and the default database name is `vault` | `records › format v1 regression › keyId of a fixed input is unchanged / keyAad of fixed fields is unchanged / a key record written by the v1 code still lists and signs / the default database name is 'vault'` | Chromium, Firefox, WebKit |
 | Records are parsed strictly: an unexpected field on the header, its protection, a key record or its sealed part is `corrupted` | `records › strict parsing › an unexpected extra field on … is corrupted`, `› an extra field fails closed through the API too…` | Chromium, Firefox, WebKit |
 | Every malformed field is `corrupted`, and the error names the field | `records › strict parsing › a malformed header field is corrupted and named: …`, `› a malformed key record field is corrupted and named: …` | Chromium, Firefox, WebKit |
-| A signature verifies under the public key alone, without Vault | `vault › keys › a signature verifies under the public key without Vault`; `e2e › demo creates, lists, signs, deletes and wipes keys…` (verified again in Node) | Chromium, Firefox, WebKit |
+| A signature verifies under the public key alone, without Vault | `vault › keys › a signature verifies under the public key without Vault`; `e2e › demo creates, lists, signs, deletes and wipes keys of each type…` (verified again in Node: ed25519 with WebCrypto, secp256k1 with OpenSSL) | Chromium, Firefox, WebKit |
 | An edited id, type, public key or version is caught by `list()`, without any secret | `storage › integrity › editing <field> of a key record fails closed`: id, type, publicKey, v | Chromium, Firefox, WebKit |
 | Any edit to a stored key record fails closed (`corrupted`), and the cases cover every field | `storage › integrity › editing <field> of a key record fails closed`, `› the edit cases cover every stored field of a key record` | Chromium, Firefox, WebKit |
 | A field whose type changes but whose value doesn't (`"123"` for `123`, an `Array` or `Int8Array` for bytes) fails closed at `list()` | `storage › integrity › changing a field type without changing its value fails closed at list: …` | Chromium, Firefox, WebKit |
@@ -75,7 +76,7 @@ Test references: `<name> ›` cites `test/unit/<name>.test.ts`, `e2e ›` cites 
 | The encoding's exact v1 bytes are pinned (tags 1/2/3, 4-byte big-endian length, 8-byte big-endian integers), so a refactor can't silently change every stored id and AAD | `storage › canonical encoding › encodes the exact v1 bytes…` | Chromium, Firefox, WebKit |
 | Key ids are base64url without padding: their stored text form can't change silently | `storage › canonical encoding › key ids are base64url without padding (RFC 4648 §5)` | Chromium, Firefox, WebKit |
 | A negative `createdAt` fails closed at `list()` | `storage › integrity › a negative createdAt is rejected at list…` | Chromium, Firefox, WebKit |
-| A planted key whose public key is not valid for its type (ed25519: not 32 bytes) fails closed at `list()` | `storage › integrity › a planted key whose public key is not valid for its type is rejected at list` | Chromium, Firefox, WebKit |
+| A planted key whose public key is not valid for its type (ed25519: not 32 bytes; secp256k1: wrong length, uncompressed form, prefix 0x04, an x with no point) fails closed at `list()` | `storage › integrity › a planted key whose public key is not valid for its type is rejected at list` | Chromium, Firefox, WebKit |
 | A planted key with a degenerate public key fails closed at `sign()` | `storage › integrity › a planted key with a degenerate public key is listed like any added key, and sign fails closed` | Chromium, Firefox (skipped in WebKit, where verify crashes the tab: not protected) |
 | Ciphertexts swapped between records fail closed | `storage › integrity › ciphertexts swapped between two key records fail closed` | Chromium, Firefox, WebKit |
 | A key an attacker sealed to the public wrapping key is rejected, not used | `storage › integrity › a key an attacker sealed to the public wrapping key decrypts, but is rejected instead of used` | Chromium, Firefox, WebKit |
@@ -117,5 +118,11 @@ Test references: `<name> ›` cites `test/unit/<name>.test.ts`, `e2e ›` cites 
 | Delete removes exactly one key | `vault › keys › delete removes only that key, and deleting a missing key is a no-op` | Chromium, Firefox, WebKit |
 | Keys persist across reopen and page reload | `vault › keys › keys survive closing and reopening the vault`; `e2e › demo creates…` | Chromium, Firefox, WebKit |
 | A generated key's secret buffers are erased once it is stored, and on every failure path of `generate` | `storage › encryption at rest › a generated key has its secrets erased once, after it is stored`, `› a generated key has its secrets erased when generate fails: <case>` | Chromium, Firefox, WebKit |
+| secp256k1 reproduces a published deterministic-ECDSA vector exactly, from a planted record with the published private key | `storage › secp256k1 › a published deterministic-ECDSA vector is reproduced exactly` | Chromium, Firefox, WebKit |
+| A stored secp256k1 key record is pinned: it lists and gives a fixed signature | `records › format: secp256k1 known answer › a stored secp256k1 key record lists and gives the expected signature` | Chromium, Firefox, WebKit |
+| Every secp256k1 signature is low-S, checked without the curve library | `vault › every secp256k1 signature is low-S, checked without the curve library` | Chromium, Firefox, WebKit |
+| A planted sealed value that is not a valid secp256k1 scalar (zero, the group order or above, 31 or 33 bytes) is `corrupted` at `sign()`, by Vault's own check | `storage › secp256k1 › a planted sealed value that is not a valid scalar is corrupted at sign: <case>` | Chromium, Firefox, WebKit |
+| secp256k1 secret buffers Vault owns are zeroed: the seed and the scalar in `generate`, the decrypted scalar in `sign`, on failure paths too | `storage › secp256k1 › generate erases the seed and the scalar it owns, also when the write fails`, `› sign erases the decrypted scalar, also when it is rejected` | Chromium, Firefox, WebKit |
+| The type of a signature follows the type of the key passed to `sign` | `vault › the type of a signature follows the type of the key passed to sign` (checked by `npm run typecheck`) | Chromium, Firefox, WebKit |
 | The core never names a key type: a new sealed key type is one module and one registry entry | `key-types › no core file names a registered key type` | Chromium, Firefox, WebKit |
 | Opening and listing write nothing | `vault › lifecycle › opening and listing write nothing; the first generate creates the vault` | Chromium, Firefox, WebKit |
