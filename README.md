@@ -2,7 +2,7 @@
 
 A browser-native private-key store on top of IndexedDB. Design: [DESIGN.md](DESIGN.md).
 
-> Status: S2 in progress. Unprotected vault with ed25519 and secp256k1 keys in named scopes: generate, list, sign, delete per scope; wipe for the whole vault. Keys are encrypted at rest in a versioned storage format, and errors are classified. Not built yet: labels, multi-tab notifications, passkey keys, passkey protection.
+> Status: S2 in progress. Unprotected vault with ed25519 and secp256k1 keys in named scopes: generate, list, sign, delete per scope; wipe for the whole vault. Keys are encrypted at rest in a versioned storage format, and errors are classified. Keys can carry a label, fixed at generate. Not built yet: multi-tab notifications, passkey keys, passkey protection.
 
 ## Setup
 
@@ -18,7 +18,7 @@ npx playwright install --with-deps chromium firefox webkit   # --with-deps insta
 | Command | What it does |
 |---|---|
 | `npm run build` | Compiles the library to `dist/` (ES modules and `.d.ts`) |
-| `npm run demo` | Serves the demo page at http://localhost:5173: generate a key of either type, list, sign (verified outside Vault: ed25519 with WebCrypto, secp256k1 with `@noble/curves`), delete in one fixed scope, `demo`; wipe |
+| `npm run demo` | Serves the demo page at http://localhost:5173: generate a key of either type with an optional label, list, sign (verified outside Vault: ed25519 with WebCrypto, secp256k1 with `@noble/curves`), delete in one fixed scope, `demo`; wipe |
 | `npm run typecheck` | Type checks browser code (`tsconfig.json`, no Node globals) and Node-side config, scripts and e2e tests (`tsconfig.node.json`) |
 | `npm run lint` | oxlint: the coding-standards rules marked _(oxlint)_ (`.oxlintrc.json`) |
 | `npm run format:check` | Prettier over the whole repo; the pre-commit hook formats only staged files, so CI runs this to catch drift elsewhere |
@@ -37,7 +37,7 @@ import { Vault } from 'vault';
 
 const vault = await Vault.open();
 const keys = vault.scope('https://app.example');   // a named group of keys; synchronous, no I/O
-const key = await keys.generate('ed25519');
+const key = await keys.generate('ed25519', { label: 'Payments' }); // the label is fixed: it can't be renamed
 const signature = await keys.sign(key, new TextEncoder().encode('hello')); // the KeyInfo itself, not its id
 const k1 = await keys.generate('secp256k1');      // ECDSA over SHA-256, low-S, 64-byte r ‖ s
 ```
@@ -65,7 +65,7 @@ Test references: `<name> ›` cites `test/unit/<name>.test.ts`, `e2e ›` cites 
 | Tests run in real browser engines, not an emulation | `platform › runs in the real browser engine it is configured for` | Chromium, Firefox, WebKit |
 | Playwright suite serves the demo from a secure context (needed by WebCrypto and WebAuthn) | `e2e › demo page runs its TypeScript module in a secure context` | Chromium, Firefox, WebKit |
 | No private key bytes are stored; the only stored secret is a non-extractable root key | `storage › encryption at rest › no private key bytes are stored: only ciphertext and a non-extractable root key` (raw key bytes), with `› decrypting needs the root key…` (any form that opens without the secret) | Chromium, Firefox, WebKit |
-| A key sealed by format v1 still opens: HKDF info, label, salt and key length can't change silently (round trips alone would miss it) | `storage › encryption at rest › a value sealed by format v1 still opens: key derivation and cipher parameters are pinned` | Chromium, Firefox, WebKit |
+| A key sealed by format v1 still opens: HKDF info, domain separator, salt and key length can't change silently (round trips alone would miss it) | `storage › encryption at rest › a value sealed by format v1 still opens: key derivation and cipher parameters are pinned` | Chromium, Firefox, WebKit |
 | Nothing decrypts without the root key (the sealing really uses ECDH) | `storage › encryption at rest › decrypting needs the root key: with another private key in its place, sign fails closed` | Chromium, Firefox, WebKit |
 | Format v1 is pinned: key id and AAD of fixed inputs, a key record written by the v1 code still lists and signs, and the default database name is `vault` | `records › format v1 regression › keyId of a fixed input is unchanged / keyAad of fixed fields is unchanged / a key record written by the v1 code still lists and signs / the default database name is 'vault'` | Chromium, Firefox, WebKit |
 | Records are parsed strictly: an unexpected field on the header, its protection, a key record or its sealed part is `corrupted` | `records › strict parsing › an unexpected extra field on … is corrupted`, `› an extra field fails closed through the API too…` | Chromium, Firefox, WebKit |
@@ -108,7 +108,14 @@ Test references: `<name> ›` cites `test/unit/<name>.test.ts`, `e2e ›` cites 
 | The id of a key of another scope is `not-found` for `sign` and untouched by `delete` | `vault › scopes › the id of a key of another scope is not-found by sign and untouched by delete` | Chromium, Firefox, WebKit |
 | A key passed to a scope it doesn't belong to is a `TypeError` in `sign` and `delete`: not signed with, not deleted | `vault › scopes › a key passed to another scope is a TypeError in sign and delete: not signed with, not deleted` | Chromium, Firefox, WebKit |
 | `sign` and `delete` take a key's public information as returned, a structured clone included | `vault › keys › sign and delete take the public information as returned, a structured clone included` | Chromium, Firefox, WebKit |
-| Only the id, scope and type of the argument count: an edited public key or creation time changes nothing, and the signature verifies under the stored public key | `vault › keys › only the id, scope and type of the argument count: edited public key and creation time change nothing` | Chromium, Firefox, WebKit |
+| Only the id, scope and type of the argument count: an edited public key, creation time or label changes nothing, and the signature verifies under the stored public key | `vault › keys › only the id, scope and type of the argument count: edited public key, creation time and label change nothing` | Chromium, Firefox, WebKit |
+| A label given at `generate` is stored and listed; a key without one has no `label` field, stored or listed | `vault › labels › a label given at generate is stored and carried by the public information; without one there is no label field` | Chromium, Firefox, WebKit |
+| A malformed label (empty, over 256 code units, a lone surrogate, not a string) is a `TypeError`, thrown before anything is generated or written | `vault › labels › a malformed label is a TypeError, thrown before anything is generated or written` | Chromium, Firefox, WebKit |
+| Labels of 1 to 256 code units are kept exactly and need not be unique | `vault › labels › labels of 1 and 256 code units are kept exactly, and need not be unique` | Chromium, Firefox, WebKit |
+| A stored label edited, added or removed fails `sign()` with `corrupted`; `list()` shows the stored label (documented, not detected) | `storage › integrity › a stored label edited, added or removed makes sign fail with corrupted, and list shows the stored label`, `› editing <field> of a key record fails closed`: label | Chromium, Firefox, WebKit |
+| A malformed stored label (wrong type, empty, too long, a lone surrogate, present but `undefined`) is `corrupted` at `list()`, naming `key.label` | `records › strict parsing › a malformed stored label fails list closed with corrupted, naming the field`, `› a malformed key record field is corrupted and named: label …` | Chromium, Firefox, WebKit |
+| The AAD of a labelled record is pinned: the v1 AAD followed by the tagged label | `records › format v1 regression › keyAad of a labelled record is the v1 associated data followed by the tagged label` | Chromium, Firefox, WebKit |
+| The demo renders labels as text, never as markup | `e2e › demo generates a labelled key and lists its label as text, never as markup` | Chromium, Firefox, WebKit |
 | An argument whose type differs from the stored key is a `TypeError`, and the key is not deleted | `vault › keys › an argument whose type differs from the stored key is a TypeError, and the key is not deleted` | Chromium, Firefox, WebKit |
 | `delete` removes a record whose stored type was tampered with, as before (only a different registered type is a `TypeError`) | `storage › integrity › delete removes a record whose stored type was tampered with` | Chromium, Firefox, WebKit |
 | An argument that is not an object with a string id (an id string alone included) is a `TypeError` | `vault › keys › an argument that is not an object with a string id is a TypeError in sign and delete` | Chromium, Firefox, WebKit |

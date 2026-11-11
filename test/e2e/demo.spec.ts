@@ -118,3 +118,25 @@ test('demo creates, lists, signs, deletes and wipes keys of each type, and its s
   await expect(page.locator('#status')).toHaveText('Ready');
   await expect(rows).toHaveCount(0);
 });
+
+test('demo generates a labelled key and lists its label as text, never as markup', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#status')).toHaveText('Ready');
+  const rows = page.locator('#keys tr');
+  const label = '<img src=x onerror="document.title=1">Payments';
+
+  await page.fill('#label', label);
+  await generate(page, 'ed25519');
+  await expect(rows).toHaveCount(1);
+  await page.fill('#label', '');
+  await generate(page, 'secp256k1');
+  await expect(rows).toHaveCount(2);
+
+  await expect(rows.nth(0).getByRole('cell', { name: label, exact: true })).toHaveCount(1);
+  await expect(rows.locator('img')).toHaveCount(0);
+  await page.reload();
+  await expect(page.locator('#status')).toHaveText('Ready');
+  await expect(rows.nth(0).getByRole('cell', { name: label, exact: true })).toHaveCount(1);
+  await page.click('#wipe');
+  await expect(rows).toHaveCount(0);
+});

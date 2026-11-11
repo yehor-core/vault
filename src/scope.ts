@@ -6,7 +6,9 @@ import {
   corrupted,
   FORMAT_VERSION,
   keyAad,
+  isLabel,
   keyId,
+  MAX_LABEL_LENGTH,
   parseKeyRecord,
   type HeaderRecord,
   type KeyFields,
@@ -36,8 +38,15 @@ export type KeyInfo = {
     /** In the encoding of its key type (DESIGN.md §7.5). */
     readonly publicKey: Uint8Array<ArrayBuffer>;
     readonly createdAt: Date;
+    /** Given at generate, never changed; absent when none was given. */
+    readonly label?: string;
   };
 }[KeyTypeName];
+
+export interface GenerateOptions {
+  /** A well-formed string of 1 to 256 UTF-16 code units. Need not be unique; can't be changed later. */
+  readonly label?: string;
+}
 
 /** One member per key type; the bytes are in that type's signature encoding (DESIGN.md §7.5). */
 export type Signature<T extends KeyTypeName = KeyTypeName> = {
@@ -64,13 +73,16 @@ export class Scope {
   }
 
   /** Generates a key inside the vault. Never prompts. */
-  async generate(type: KeyTypeName): Promise<KeyInfo> {
+  async generate(type: KeyTypeName, options: GenerateOptions = {}): Promise<KeyInfo> {
     if (!isKeyTypeName(type)) throw new TypeError(`Unknown key type: ${String(type)}`);
+    const { label } = options; // read once: a getter can't change between the check and the write
+    if (label !== undefined && !isLabel(label))
+      throw new TypeError(`A label is a well-formed string of 1 to ${MAX_LABEL_LENGTH} UTF-16 code units`);
     const record = await untilUnchanged(MAX_ATTEMPTS, async () => {
       const { header, isNew } = await this.#headerForWrite();
       const generated = await generateKey(type);
       try {
-        const record = await this.#prepareKeyRecord(type, header, generated);
+        const record = await this.#prepareKeyRecord(type, label, header, generated);
         const written = await this.#commitKeyRecord(record, header, isNew);
         return written ? record : undefined;
       } finally {
@@ -154,7 +166,12 @@ export class Scope {
   }
 
   /** The crypto after generation: derive the id, seal. Outside any transaction: crypto would end it. */
-  async #prepareKeyRecord(type: KeyTypeName, header: HeaderRecord, generated: GeneratedKey): Promise<KeyRecord> {
+  async #prepareKeyRecord(
+    type: KeyTypeName,
+    label: string | undefined,
+    header: HeaderRecord,
+    generated: GeneratedKey,
+  ): Promise<KeyRecord> {
     const scope = this.#name;
     const id = await keyId(scope, type, generated.publicKey);
     const fields: KeyFields = {
@@ -164,6 +181,7 @@ export class Scope {
       type,
       publicKey: generated.publicKey,
       createdAt: Date.now(),
+      ...(label !== undefined && { label }), // never `label: undefined`: it would be stored
     };
     const sealed = await sealFields(header, fields, generated.seal);
     return { ...fields, sealed };
@@ -232,8 +250,8 @@ async function createHeader(): Promise<HeaderRecord> {
 }
 
 function keyInfo(record: KeyRecord): KeyInfo {
-  const { id, scope, type, publicKey } = record;
-  return { id, scope, type, publicKey, createdAt: new Date(record.createdAt) };
+  const { id, scope, type, publicKey, label } = record;
+  return { id, scope, type, publicKey, createdAt: new Date(record.createdAt), ...(label !== undefined && { label }) };
 }
 
 /**

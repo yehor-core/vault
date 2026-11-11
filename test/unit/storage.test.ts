@@ -428,6 +428,7 @@ describe.each(keyTypeCases)('$type', ({ type, signatureLength, invalidPublicKeys
       { field: 'type', atList: true, edit: (r) => ({ ...r, type: r.type.toUpperCase() }) }, // registered by no build
       { field: 'publicKey', atList: true, edit: (r, other) => ({ ...r, publicKey: other.publicKey }) },
       { field: 'createdAt', atList: false, edit: (r) => ({ ...r, createdAt: r.createdAt - 1 }) },
+      { field: 'label', atList: false, edit: (r) => ({ ...r, label: `${r.label}!` }) },
       {
         field: 'sealed.ephemeralPublicKey',
         atList: false,
@@ -443,7 +444,7 @@ describe.each(keyTypeCases)('$type', ({ type, signatureLength, invalidPublicKeys
 
     test('the edit cases cover every stored field of a key record', async () => {
       const { scope, name } = await openVault();
-      const record = await readKey(name, scope.name, (await scope.generate(type)).id);
+      const record = await readKey(name, scope.name, (await scope.generate(type, { label: 'target' })).id);
       const fields = Object.entries(record).flatMap(([k, v]) =>
         k === 'sealed' ? Object.keys(v as object).map((s) => `sealed.${s}`) : [k],
       );
@@ -454,7 +455,7 @@ describe.each(keyTypeCases)('$type', ({ type, signatureLength, invalidPublicKeys
     test.each(edits)('editing $field of a key record fails closed', async ({ edit, atList }) => {
       tickingClock();
       const { scope, name } = await openVault();
-      const [target, other] = [await scope.generate(type), await scope.generate(type)];
+      const [target, other] = [await scope.generate(type, { label: 'target' }), await scope.generate(type)];
       const edited = edit(await readKey(name, scope.name, target.id), await readKey(name, scope.name, other.id));
       await replaceKey(name, scope.name, target.id, edited);
 
@@ -462,6 +463,31 @@ describe.each(keyTypeCases)('$type', ({ type, signatureLength, invalidPublicKeys
       else expect((await scope.list()).map((k) => k.id)).toEqual([target.id, other.id]); // not visible without decrypting
       await expectVaultError(scope.sign({ ...target, id: edited.id }, message), 'corrupted');
       await expect(scope.sign(other, message)).resolves.toMatchObject({ type });
+    });
+
+    // D-18: list() reads no secret, so it shows an edited label; only sign() can detect the edit.
+    test('a stored label edited, added or removed makes sign fail with corrupted, and list shows the stored label', async () => {
+      tickingClock();
+      const { scope, name } = await openVault();
+      const [labelled, unlabelled, kept] = [
+        await scope.generate(type, { label: 'Payments' }),
+        await scope.generate(type),
+        await scope.generate(type, { label: 'kept' }),
+      ];
+      const stored = await readKey(name, scope.name, labelled.id);
+      await replaceKey(name, scope.name, labelled.id, { ...stored, label: 'Payroll' });
+      expect((await scope.list()).map((k) => k.label)).toEqual(['Payroll', undefined, 'kept']);
+      await expectVaultError(scope.sign(labelled, message), 'corrupted');
+
+      const { label: _, ...removed } = stored;
+      await replaceKey(name, scope.name, labelled.id, removed);
+      await expectVaultError(scope.sign(labelled, message), 'corrupted');
+
+      const added = { ...(await readKey(name, scope.name, unlabelled.id)), label: 'Payments' };
+      await replaceKey(name, scope.name, unlabelled.id, added);
+      await expectVaultError(scope.sign(unlabelled, message), 'corrupted');
+
+      await expect(scope.sign(kept, message)).resolves.toMatchObject({ type });
     });
 
     // Same value, different type: String() or a loose encoding would make these invisible to the id and AAD.
