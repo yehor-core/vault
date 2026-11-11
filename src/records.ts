@@ -42,12 +42,16 @@ export type KeyFields = Omit<KeyRecord, 'sealed'>;
 
 /** A well-formed string of 1 to MAX_SCOPE_NAME_LENGTH UTF-16 code units, compared exactly (no normalisation). */
 export function isScopeName(value: unknown): value is string {
-  return isString(value) && value.length >= 1 && value.length <= MAX_SCOPE_NAME_LENGTH && value.isWellFormed();
+  return isWellFormedString(value, MAX_SCOPE_NAME_LENGTH);
 }
 
 /** A well-formed string of 1 to MAX_LABEL_LENGTH UTF-16 code units. */
 export function isLabel(value: unknown): value is string {
-  return isString(value) && value.length >= 1 && value.length <= MAX_LABEL_LENGTH && value.isWellFormed();
+  return isWellFormedString(value, MAX_LABEL_LENGTH);
+}
+
+function isWellFormedString(value: unknown, maxLength: number): value is string {
+  return isString(value) && value.length >= 1 && value.length <= maxLength && value.isWellFormed();
 }
 
 // Field readers. Everything read from IndexedDB is untrusted: each reader checks one field, never coerces,

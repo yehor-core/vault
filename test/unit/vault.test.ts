@@ -176,12 +176,16 @@ describe.each(keyTypeCases)('$type', ({ type, publicKeyLength, signatureLength, 
       expect(await verify(labelled.publicKey, signature.bytes, message)).toBe(true);
     });
 
-    test('a malformed label is a TypeError, thrown before anything is generated or written', async () => {
+    test('a malformed label or options argument is a TypeError, thrown before anything is generated or written', async () => {
       const { scope, name } = await openVault();
       const generate = vi.spyOn(keyTypes[type], 'generate');
       const malformed = ['', 'x'.repeat(257), '\uD800', 'a\uDC00b', 1, null, {}, new String('label')];
       for (const label of malformed) {
         await expect(scope.generate(type, { label: label as never })).rejects.toThrow(TypeError);
+      }
+      // A string or number where the options belong would otherwise be read as "no label".
+      for (const options of ['Payments', 1, null]) {
+        await expect(scope.generate(type, options as never)).rejects.toThrow(TypeError);
       }
       expect(generate).not.toHaveBeenCalled();
       expect(await readAll(name)).toEqual({ meta: [], keys: [] });

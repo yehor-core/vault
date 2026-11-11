@@ -5,8 +5,8 @@ import { isKeyTypeName, keyTypes, type GeneratedKey, type KeyTypeName } from './
 import {
   corrupted,
   FORMAT_VERSION,
-  keyAad,
   isLabel,
+  keyAad,
   keyId,
   MAX_LABEL_LENGTH,
   parseKeyRecord,
@@ -44,7 +44,7 @@ export type KeyInfo = {
 }[KeyTypeName];
 
 export interface GenerateOptions {
-  /** A well-formed string of 1 to 256 UTF-16 code units. Need not be unique; can't be changed later. */
+  /** A well-formed string of 1 to MAX_LABEL_LENGTH (256) UTF-16 code units. Need not be unique; can't be changed later. */
   readonly label?: string;
 }
 
@@ -75,6 +75,7 @@ export class Scope {
   /** Generates a key inside the vault. Never prompts. */
   async generate(type: KeyTypeName, options: GenerateOptions = {}): Promise<KeyInfo> {
     if (!isKeyTypeName(type)) throw new TypeError(`Unknown key type: ${String(type)}`);
+    if (typeof options !== 'object' || options === null) throw new TypeError('options must be an object');
     const { label } = options; // read once: a getter can't change between the check and the write
     if (label !== undefined && !isLabel(label))
       throw new TypeError(`A label is a well-formed string of 1 to ${MAX_LABEL_LENGTH} UTF-16 code units`);
