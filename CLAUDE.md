@@ -48,4 +48,4 @@ Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-
 
 ### Domain docs
 
-Single-context: `GLOSSARY.md` at the root; decisions in `docs/DECISIONS.md`. See `docs/agents/domain.md`.
+Single-context: `GLOSSARY.md` at the root; decisions in `docs/DECISIONS.md`, one long line each: read one with `grep '^D-20:' docs/DECISIONS.md`. See `docs/agents/domain.md`.
