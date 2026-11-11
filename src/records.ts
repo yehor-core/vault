@@ -7,6 +7,8 @@ import { IV_LENGTH, type Sealed } from './seal.ts';
 export const FORMAT_VERSION = 1;
 const LABEL_KEY_ID = 'vault/v1/key-id';
 const LABEL_KEY_AAD = 'vault/v1/key';
+/** Long enough for any origin, so an embedding layer can name a scope after its sender. */
+export const MAX_SCOPE_NAME_LENGTH = 1024;
 
 /** The single `meta/header` record: the wrapping key pair every private key is sealed to. */
 export interface HeaderRecord {
@@ -31,6 +33,11 @@ export interface KeyRecord {
 
 export type KeyFields = Omit<KeyRecord, 'sealed'>;
 
+/** A well-formed string of 1 to MAX_SCOPE_NAME_LENGTH UTF-16 code units, compared exactly (no normalisation). */
+export function isScopeName(value: unknown): value is string {
+  return isString(value) && value.length >= 1 && value.length <= MAX_SCOPE_NAME_LENGTH && value.isWellFormed();
+}
+
 // Field readers. Everything read from IndexedDB is untrusted: each reader checks one field, never coerces,
 // and names the field when it fails.
 
@@ -48,6 +55,11 @@ function readVersion(value: unknown, name: string): typeof FORMAT_VERSION {
 
 function readString(value: unknown, name: string): string {
   if (!isString(value)) throw corrupted(name);
+  return value;
+}
+
+function readScopeName(value: unknown, name: string): string {
+  if (!isScopeName(value)) throw corrupted(name);
   return value;
 }
 
@@ -117,7 +129,7 @@ function parseKeyShape(value: unknown): KeyRecord {
   const type = readKeyType(key.type, 'key.type');
   return {
     v,
-    scope: readString(key.scope, 'key.scope'),
+    scope: readScopeName(key.scope, 'key.scope'),
     id: readString(key.id, 'key.id'),
     type,
     publicKey: readBytes(key.publicKey, 'key.publicKey', keyTypes[type].publicKeyLength),

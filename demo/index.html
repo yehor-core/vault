@@ -5,27 +5,63 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Vault demo</title>
     <style>
-      body { font: 15px/1.4 system-ui, sans-serif; margin: 2rem; max-width: 60rem; }
-      table { border-collapse: collapse; margin: 1rem 0; }
-      th, td { border-bottom: 1px solid #ddd; padding: 0.3rem 0.6rem; text-align: left; }
-      code, pre { font-family: ui-monospace, monospace; font-size: 13px; }
-      pre { background: #f5f5f5; padding: 0.8rem; white-space: pre-wrap; word-break: break-all; }
-      #status.error { color: #b00020; }
+      body {
+        font:
+          15px/1.4 system-ui,
+          sans-serif;
+        margin: 2rem;
+        max-width: 60rem;
+      }
+      table {
+        border-collapse: collapse;
+        margin: 1rem 0;
+      }
+      th,
+      td {
+        border-bottom: 1px solid #ddd;
+        padding: 0.3rem 0.6rem;
+        text-align: left;
+      }
+      code,
+      pre {
+        font-family: ui-monospace, monospace;
+        font-size: 13px;
+      }
+      pre {
+        background: #f5f5f5;
+        padding: 0.8rem;
+        white-space: pre-wrap;
+        word-break: break-all;
+      }
+      #status.error {
+        color: #b00020;
+      }
     </style>
   </head>
   <body>
     <h1>Vault demo</h1>
     <p>Mode: unprotected. Keys are encrypted at rest; the root key is a non-extractable browser key.</p>
+    <p>Scope: <code id="scope"></code>. Wipe clears every scope of the vault.</p>
     <p id="status">Loading…</p>
 
     <p>
       <button id="generate">Generate ed25519 key</button>
       <button id="wipe">Wipe vault</button>
     </p>
-    <p><label>Message to sign <input id="message" value="hello, vault" size="40" /></label></p>
+    <p>
+      <label>Message to sign <input id="message" value="hello, vault" size="40" /></label>
+    </p>
 
     <table>
-      <thead><tr><th>Id</th><th>Type</th><th>Public key</th><th>Created</th><th></th></tr></thead>
+      <thead>
+        <tr>
+          <th>Id</th>
+          <th>Type</th>
+          <th>Public key</th>
+          <th>Created</th>
+          <th></th>
+        </tr>
+      </thead>
       <tbody id="keys"></tbody>
     </table>
 

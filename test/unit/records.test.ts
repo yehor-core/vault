@@ -1,7 +1,17 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { Vault } from '../../src/index.ts';
 import { keyAad, keyId, parseHeader, parseKeyRecord } from '../../src/records.ts';
-import { cleanup, done, expectVaultError, openVault, rawRun, readHeader, readKey, replaceKey, writeHeader } from './helpers.ts';
+import {
+  cleanup,
+  done,
+  expectVaultError,
+  openVault,
+  rawRun,
+  readHeader,
+  readKey,
+  replaceKey,
+  writeHeader,
+} from './helpers.ts';
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -38,7 +48,7 @@ describe('format v1 regression', () => {
   test("the default database name is 'vault'", async () => {
     const vault = await Vault.open();
     try {
-      const key = await vault.generate('ed25519');
+      const key = await vault.scope('default').generate('ed25519');
       const stored = await rawRun<any>('vault', ['keys'], (tx) => tx.objectStore('keys').get(['default', key.id]));
       expect(stored?.id).toBe(key.id);
     } finally {
@@ -52,25 +62,46 @@ describe('format v1 regression', () => {
   });
 
   test('keyAad of fixed fields is unchanged', () => {
+    // prettier-ignore
     const fields = { v: 1, scope: 'default', id: 'fixed-id', type: 'ed25519', publicKey: fixedPublicKey, createdAt: 1762473600000 } as const;
     expect(keyAad(fields).toHex()).toBe(V1.keyAad);
   });
 
+  // S1 had one fixed scope, 'default'; its records live on in the ordinary scope of that name.
   test('a key record written by the v1 code still lists and signs', async () => {
     const { vault, name } = await openVault();
+    const scope = vault.scope('default');
     const r = V1.record;
-    const root = await crypto.subtle.importKey('pkcs8', bytes(r.wrappingPkcs8), { name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveKey']);
+    const root = await crypto.subtle.importKey(
+      'pkcs8',
+      bytes(r.wrappingPkcs8),
+      { name: 'ECDH', namedCurve: 'P-256' },
+      false,
+      ['deriveKey'],
+    );
     const header = { v: 1, wrappingPublicKey: bytes(r.wrappingSpki), protection: { kind: 'none', privateKey: root } };
-    const sealed = { ephemeralPublicKey: bytes(r.ephemeralPublicKey), iv: bytes(r.iv), ciphertext: bytes(r.ciphertext) };
-    const record = { v: 1, scope: 'default', id: r.id, type: 'ed25519', publicKey: bytes(r.publicKey), createdAt: r.createdAt, sealed };
+    const sealed = {
+      ephemeralPublicKey: bytes(r.ephemeralPublicKey),
+      iv: bytes(r.iv),
+      ciphertext: bytes(r.ciphertext),
+    };
+    const record = {
+      v: 1,
+      scope: 'default',
+      id: r.id,
+      type: 'ed25519',
+      publicKey: bytes(r.publicKey),
+      createdAt: r.createdAt,
+      sealed,
+    };
     await rawRun(name, ['meta', 'keys'], (tx) => {
       tx.objectStore('meta').put(header, 'header');
       tx.objectStore('keys').put(record);
     });
 
-    expect((await vault.list()).map((k) => k.id)).toEqual([r.id]);
+    expect((await scope.list()).map((k) => k.id)).toEqual([r.id]);
     const data = new TextEncoder().encode('signed by a v1 record');
-    const signature = await vault.sign(r.id, data);
+    const signature = await scope.sign(r.id, data);
     const publicKey = await crypto.subtle.importKey('raw', bytes(r.publicKey), 'Ed25519', false, ['verify']);
     expect(await crypto.subtle.verify('Ed25519', publicKey, signature.bytes, data)).toBe(true);
   });
@@ -78,9 +109,9 @@ describe('format v1 regression', () => {
 
 /** A real header and key record, as Vault stored them. */
 async function storedRecords() {
-  const { vault, name } = await openVault();
-  const key = await vault.generate('ed25519');
-  return { vault, name, header: await readHeader(name), record: await readKey(name, key.id) };
+  const { scope, name } = await openVault();
+  const key = await scope.generate('ed25519');
+  return { scope, name, header: await readHeader(name), record: await readKey(name, scope.name, key.id) };
 }
 
 async function expectCorruptedMessage(parse: () => unknown, what: string) {
@@ -100,8 +131,16 @@ describe('strict parsing', () => {
     ["v as '1'", 'header.v', (h) => ({ ...h, v: '1' })],
     ['wrappingPublicKey as a string', 'header.wrappingPublicKey', (h) => ({ ...h, wrappingPublicKey: 'spki' })],
     ['protection missing', 'header.protection', (h) => ({ ...h, protection: null })],
-    ['unknown protection kind', 'header.protection.kind', (h) => ({ ...h, protection: { ...h.protection, kind: 'passkey' } })],
-    ['root not a CryptoKey', 'header.protection.privateKey', (h) => ({ ...h, protection: { ...h.protection, privateKey: {} } })],
+    [
+      'unknown protection kind',
+      'header.protection.kind',
+      (h) => ({ ...h, protection: { ...h.protection, kind: 'passkey' } }),
+    ],
+    [
+      'root not a CryptoKey',
+      'header.protection.privateKey',
+      (h) => ({ ...h, protection: { ...h.protection, privateKey: {} } }),
+    ],
   ];
 
   test.each(headerCases)('a malformed header field is corrupted and named: %s', async (_, what, edit) => {
@@ -113,6 +152,9 @@ describe('strict parsing', () => {
     ['not an object', 'key', () => 'record'],
     ["v as '1'", 'key.v', (r) => ({ ...r, v: '1' })],
     ['scope as a number', 'key.scope', (r) => ({ ...r, scope: 1 })],
+    ['scope empty', 'key.scope', (r) => ({ ...r, scope: '' })],
+    ['scope of 1025 code units', 'key.scope', (r) => ({ ...r, scope: 'x'.repeat(1025) })],
+    ['scope with a lone surrogate', 'key.scope', (r) => ({ ...r, scope: '\uD800' })],
     ['id as a number', 'key.id', (r) => ({ ...r, id: 1 })],
     ['unknown type', 'key.type', (r) => ({ ...r, type: 'secp256k1' })],
     ["type 'constructor' (inherited, not registered)", 'key.type', (r) => ({ ...r, type: 'constructor' })],
@@ -124,10 +166,22 @@ describe('strict parsing', () => {
     ['createdAt as a string', 'key.createdAt', (r) => ({ ...r, createdAt: String(r.createdAt) })],
     ['createdAt negative', 'key.createdAt', (r) => ({ ...r, createdAt: -1 })],
     ['sealed missing', 'key.sealed', (r) => ({ ...r, sealed: undefined })],
-    ['ephemeralPublicKey as a string', 'key.sealed.ephemeralPublicKey', (r) => ({ ...r, sealed: { ...r.sealed, ephemeralPublicKey: 'x' } })],
+    [
+      'ephemeralPublicKey as a string',
+      'key.sealed.ephemeralPublicKey',
+      (r) => ({ ...r, sealed: { ...r.sealed, ephemeralPublicKey: 'x' } }),
+    ],
     ['iv of 11 bytes', 'key.sealed.iv', (r) => ({ ...r, sealed: { ...r.sealed, iv: r.sealed.iv.slice(0, 11) } })],
-    ['iv of 13 bytes', 'key.sealed.iv', (r) => ({ ...r, sealed: { ...r.sealed, iv: Uint8Array.of(...r.sealed.iv, 0) } })],
-    ['ciphertext as an ArrayBuffer', 'key.sealed.ciphertext', (r) => ({ ...r, sealed: { ...r.sealed, ciphertext: r.sealed.ciphertext.buffer } })],
+    [
+      'iv of 13 bytes',
+      'key.sealed.iv',
+      (r) => ({ ...r, sealed: { ...r.sealed, iv: Uint8Array.of(...r.sealed.iv, 0) } }),
+    ],
+    [
+      'ciphertext as an ArrayBuffer',
+      'key.sealed.ciphertext',
+      (r) => ({ ...r, sealed: { ...r.sealed, ciphertext: r.sealed.ciphertext.buffer } }),
+    ],
     ['id of another key', 'key.id does not match its public key', (r) => ({ ...r, id: 'another-id' })],
   ];
 
@@ -149,12 +203,12 @@ describe('strict parsing', () => {
   });
 
   test('an extra field fails closed through the API too, for the header and for a key record', async () => {
-    const { vault, name, header, record } = await storedRecords();
-    await replaceKey(name, record.id, { ...record, label: 'not in format v1' });
-    await expectVaultError(vault.list(), 'corrupted');
+    const { scope, name, header, record } = await storedRecords();
+    await replaceKey(name, scope.name, record.id, { ...record, label: 'not in format v1' });
+    await expectVaultError(scope.list(), 'corrupted');
 
-    await replaceKey(name, record.id, record);
+    await replaceKey(name, scope.name, record.id, record);
     await writeHeader(name, { ...header, extra: 1 });
-    await expectVaultError(vault.list(), 'corrupted');
+    await expectVaultError(scope.list(), 'corrupted');
   });
 });

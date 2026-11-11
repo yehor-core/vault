@@ -21,7 +21,7 @@ Vault is a browser-native private-key store on IndexedDB. An application calls i
 | Cheap to add, gated to use | Adding needs only the public wrapping key | §3.1 |
 | Many key types, one model | ed25519; key-type interface in place | §7.5 |
 | Correct under concurrency and failure | Atomic writes, fail-closed reads; multi-tab not tested yet | §4.2, §6 |
-| A small, idiomatic domain API | Built for unprotected ed25519 keys | §7 |
+| A small, idiomatic domain API | Built for unprotected ed25519 keys in named scopes | §7 |
 
 ## 2. Threat model
 
@@ -33,7 +33,7 @@ Vault is a browser-native private-key store on IndexedDB. An application calls i
 | Wrapping private key: decrypts every private key | Yes. In unprotected mode it is the root secret. |
 | Integrity of key records: Vault signs only with the key whose public key it lists | — |
 | Protection state (unprotected or passkey-protected) | Not built yet |
-| Key metadata: id, type, public key, createdAt | No. Stored in the clear, readable by anyone who can read storage. |
+| Public information: id, scope, type, public key, createdAt | No. Stored in the clear, readable by anyone who can read storage. |
 
 ### 2.2 Adversaries and events
 
@@ -53,9 +53,9 @@ Trusted: the browser, its WebCrypto and IndexedDB implementations, the OS, and o
 |---|---|---|---|---|
 | Copy of the browser profile or disk | Unprotected | Private keys are stored only as AES-256-GCM ciphertext. The only stored secret is the wrapping private key, a non-extractable CryptoKey held by the browser, and without it nothing decrypts. | **Not protected against a profile copy.** The browser keeps the root key's bytes in the profile, so the copy, opened in the same browser or parsed, recovers every key. | `storage › no private key bytes are stored: only ciphertext and a non-extractable root key`, `› decrypting needs the root key…` |
 | | Protected | Not built yet | | |
-| Records added or replaced by anyone who can write to storage | Both | `list()`, with no secret, rejects a field of the wrong type or length, and an edited id, type, public key or version. A record whose scope was edited leaves its scope's key range, and its new scope rejects it, because the id binds the scope. `sign()` rejects an edit to any other field: a changed byte, swapped ciphertexts, an off-curve ephemeral key. It also rejects a key the attacker sealed to the public wrapping key: that ciphertext decrypts cleanly, so the signature check before returning catches it. Key records without a header are never treated as a new vault. All of these fail with `corrupted`. | A complete new key record needs no secret, so an added key can't be told from a real one. Deleting records isn't detected. Edits to createdAt and to the ciphertext surface only when the key is used. A replaced header is not detected at list time (§11). **In WebKit, signing with a planted key whose public key is degenerate (e.g. the identity point) crashes the tab instead of failing with `corrupted`: not protected** (§8). | `storage › editing <field> of a key record fails closed` (8 cases plus a coverage check), `› changing a field type without changing its value…` (6 cases), `› a planted key whose public key has the wrong length…`, `› a planted key with a degenerate public key…` (Chromium, Firefox), `› ciphertexts swapped…`, `› a key an attacker sealed…`, `› an off-curve ephemeral public key…`, `› a key record moved to another scope…`, `vault › key records without a vault header are corrupted everywhere…` |
+| Records added or replaced by anyone who can write to storage | Both | `list()`, with no secret, rejects a field of the wrong type or length, and an edited id, type, public key or version. A record moved to another scope fails closed: `list()` rejects it there if its id was kept, because the id binds the scope; if the id was recomputed for the new scope, `sign()` rejects it, because the AAD binds scope and id. `sign()` rejects an edit to any other field: a changed byte, swapped ciphertexts, an off-curve ephemeral key. It also rejects a key the attacker sealed to the public wrapping key: that ciphertext decrypts cleanly, so the signature check before returning catches it. Key records without a header are never treated as a new vault. All of these fail with `corrupted`. | A complete new key record needs no secret, so an added key can't be told from a real one. Deleting records isn't detected. Edits to createdAt and to the ciphertext surface only when the key is used. A replaced header is not detected at list time (§11). **In WebKit, signing with a planted key whose public key is degenerate (e.g. the identity point) crashes the tab instead of failing with `corrupted`: not protected** (§8). | `storage › editing <field> of a key record fails closed` (8 cases plus a coverage check), `› changing a field type without changing its value…` (6 cases), `› a planted key whose public key has the wrong length…`, `› a planted key with a degenerate public key…` (Chromium, Firefox), `› ciphertexts swapped…`, `› a key an attacker sealed…`, `› an off-curve ephemeral public key…`, `› a key record moved to another scope fails closed…`, `vault › key records without a vault header are corrupted everywhere…` |
 | Older storage snapshot restored | Both | — | **Not detected.** A consistent older copy is a valid state: keys deleted since then reappear, keys added since then vanish. IndexedDB is the only store, so there is nowhere to anchor a counter. | not protected |
-| Malicious script in the same origin while unlocked | Unprotected | The API never returns private key bytes. Vault keeps no secret in memory between calls. | **Not protected.** The script can sign with every key, and can open the database and use the root key to unwrap every key as extractable, which exfiltrates them. | `src/vault.ts` (no export method) |
+| Malicious script in the same origin while unlocked | Unprotected | The API never returns private key bytes. Vault keeps no secret in memory between calls. A `Scope` has no path to its `Vault`, so code handed only a `Scope` can't wipe the vault or open another scope. | **Not protected.** The script can sign with every key, and can open the database and use the root key to unwrap every key as extractable, which exfiltrates them. **Scopes group keys; they do not isolate same-origin code:** any same-origin code can call `vault.scope(name)` with any name, or read IndexedDB directly. Keeping other-origin consumers apart is the embedding layer's job (§9). | `src/scope.ts` (no export method), `vault › a Scope has no path to its Vault…` |
 | Lost, deleted or replaced passkey (protection passkey) | Protected | Not built yet | | |
 | Lost, deleted or replaced passkey (passkey key) | Both | Not built yet | | |
 | Secrets in memory | Both | Ed25519 private keys exist only as CryptoKey objects: sealed with `wrapKey`, opened with `unwrapKey` into a non-extractable key, never as JS bytes. Per-key AES keys and the ECDH result stay inside `deriveKey`. | JS can't zero memory, and the browser may hold internal copies. A CryptoKey lives until garbage collection. | `src/ed25519.ts`, `src/seal.ts` |
@@ -122,14 +122,16 @@ One IndexedDB database (default name `vault`); schema version 1.
 | `meta` / header | `'header'` | `v`, `wrappingPublicKey` (SPKI), `protection: { kind: 'none', privateKey: CryptoKey }` | The private key is a non-extractable CryptoKey held by the browser | Not integrity-protected (§11) |
 | `keys` / key | `[scope, id]` | `v`, `scope`, `id`, `type`, `publicKey`, `createdAt`, `sealed: { ephemeralPublicKey (SPKI), iv, ciphertext }` | `ciphertext` only | `id` = SHA-256(scope, type, public key), checked by `list()`. AAD = every field except `sealed`. HKDF binds the ephemeral key and the wrapping public key. |
 
-Scopes are the first component of the key, so one scope is one key range. Only the scope `default` is used so far. Every hashed or authenticated value goes through one canonical encoding (`src/bytes.ts` `encode`): each part is a type tag, a 4-byte length and its bytes. Strings are UTF-8, bytes only `Uint8Array`, integers only safe non-negative values as 8 bytes big-endian. So field boundaries can't shift, and `123` and `"123"` never encode alike: `storage › each value keeps its type…`. The exact bytes are part of format v1 and pinned by a known-answer test, `storage › encodes the exact v1 bytes…`.
+Scopes are the first component of the key, so one scope is one key range, and a scope has no record of its own: it is there while it holds keys. A scope name is a well-formed string of 1 to 1024 UTF-16 code units, long enough for any origin, compared exactly, without normalisation: `vault › a malformed scope name is a TypeError…`. Records written before scopes existed are in the scope `default`, now an ordinary scope, and list and sign there unchanged: `records › a key record written by the v1 code still lists and signs`. Every hashed or authenticated value goes through one canonical encoding (`src/bytes.ts` `encode`): each part is a type tag, a 4-byte length and its bytes. Strings are UTF-8, bytes only `Uint8Array`, integers only safe non-negative values as 8 bytes big-endian. So field boundaries can't shift, and `123` and `"123"` never encode alike: `storage › each value keeps its type…`. The exact bytes are part of format v1 and pinned by a known-answer test, `storage › encodes the exact v1 bytes…`.
 
 Code layout:
-- `src/db.ts`: the connection and the transaction helper.
+- `src/db.ts`: opening the database, and the transaction helper.
+- `src/connection.ts`: the one connection a vault and its scopes share; closing it ends them all.
 - `src/storage.ts`: record access inside a transaction, store names, scope ranges. No crypto.
 - `src/records.ts`: the format, parsing and validation.
 - `src/seal.ts`: sealing.
-- `src/vault.ts`: composes them into the public API.
+- `src/scope.ts`: the key operations of one scope (`generate`, `list`, `sign`, `delete`).
+- `src/vault.ts`: the vault-wide operations (`open`, `scope`, `wipe`, `close`).
 
 ### 4.2 Validation and fail-closed behaviour
 
@@ -138,13 +140,13 @@ Code layout:
 | `v` is the number 1, never coerced (header and key records) | every read | `corrupted`: `storage › a header with format version 2 / '1' / true / undefined…`, `› editing v…`, `› changing a field type…: v as the string '1'` |
 | Header fields have their exact types: wrapping public key bytes, a known protection kind, a CryptoKey root. A header key whose value is `undefined` (or `null`, which WebKit returns for an unreadable value) is malformed, not absent. | `list`, `generate`, `sign` | `corrupted`: `records › a malformed header field…` (6 cases), `vault › a header stored as undefined…`, `storage › a tampered wrapping public key makes generate fail closed…` |
 | Key records without a header mean a deleted header, never a new vault: only `wipe()` works | `list`, `generate`, `sign` (`src/storage.ts` `readHeader`) | `corrupted`: `vault › key records without a vault header are corrupted everywhere…` |
-| Key record fields have their exact types: scope and id strings, a registered type, the public key a `Uint8Array` of the type's length, createdAt a safe non-negative integer, sealed fields `Uint8Array`, a 12-byte IV | `list`, `sign`, without any secret | `corrupted`: `records › a malformed key record field…` (18 cases), `storage › changing a field type…` (6 cases), `› a negative createdAt…`, `› a planted key whose public key has the wrong length…` |
+| Key record fields have their exact types: a well-formed scope name of 1 to 1024 code units, an id string, a registered type, the public key a `Uint8Array` of the type's length, createdAt a safe non-negative integer, sealed fields `Uint8Array`, a 12-byte IV | `list`, `sign`, without any secret | `corrupted`: `records › a malformed key record field…` (22 cases), `storage › changing a field type…` (6 cases), `› a negative createdAt…`, `› a planted key whose public key has the wrong length…` |
 | Id matches the hash of scope, type and public key | `list`, `sign`, without any secret | `corrupted`: `storage › editing id / type / publicKey…` |
 | Ephemeral key imports as SPKI → AES-GCM decrypt with AAD → sign → verify against the stored public key | `sign` | `corrupted`: `storage › an off-curve ephemeral public key…`, `› ciphertexts swapped…`, `› a key an attacker sealed…`, `› decrypting needs the root key…` |
 | Only the fields Vault writes: any other own field on the header, its protection, a key record or its sealed part is rejected | `list`, `generate`, `sign` | `corrupted` ("`<record>: unexpected field <name>`"): `records › an unexpected extra field on …` (4 cases), `› an extra field fails closed through the API…` |
 | A version-1 database has Vault's stores | `open` | `corrupted`: `vault › a database without Vault stores…` |
 
-Each field is read by a typed reader (`src/records.ts`), and the error names the field that failed, e.g. `Corrupted storage: key.sealed.iv`: `records › a malformed header field… / a malformed key record field…` (20 cases). The parsers return new objects built from the read values, never the stored object. The typed encoding is a backstop, not a second classified check. If a reader check were ever missing, encoding the field for the id or the AAD throws a `TypeError` and the call fails instead of accepting the record; such a failure is not classified as `corrupted`. Vault never repairs: no code path writes back a record it failed to read. A failed check rejects the whole call, so `list()` fails if any key in the scope is bad.
+Each field is read by a typed reader (`src/records.ts`), and the error names the field that failed, e.g. `Corrupted storage: key.sealed.iv`: `records › a malformed header field… / a malformed key record field…` (28 cases). The parsers return new objects built from the read values, never the stored object. The typed encoding is a backstop, not a second classified check. If a reader check were ever missing, encoding the field for the id or the AAD throws a `TypeError` and the call fails instead of accepting the record; such a failure is not classified as `corrupted`. Vault never repairs: no code path writes back a record it failed to read. A failed check rejects the whole call, so `list()` fails if any key in the scope is bad. A stored scope name that `vault.scope()` would refuse lies outside every scope's key range, so no call reads it; the parser rejects it anyway (`key.scope`).
 
 ### 4.3 Versioning and migration
 
@@ -175,7 +177,7 @@ stateDiagram-v2
   Corrupted --> Empty: wipe
 ```
 
-"Wiped" is the state Empty, and there is no separate state. Protected, locked and unlocked arrive with passkey protection. `close()` ends one instance (every later call throws `InvalidStateError`); the stored state doesn't change.
+"Wiped" is the state Empty, and there is no separate state. Protected, locked and unlocked arrive with passkey protection. States belong to the vault as a whole, never to one scope. `close()` ends one instance and every scope taken from it (every later call throws `InvalidStateError`); the stored state doesn't change.
 
 | From | Operation | To | Prompts | Atomic how | On failure |
 |---|---|---|---|---|---|
@@ -183,7 +185,7 @@ stateDiagram-v2
 | Corrupted (key records without a header) | `list`, `generate`, `sign` | Corrupted | none | — | `corrupted`; only `wipe` leads out |
 | Unprotected | `generate` | Unprotected | none | One transaction re-checks the header and adds the key (the re-check is not tested until the multi-tab slice) | Nothing written: `vault › a write that aborts at commit…` |
 | Unprotected | `delete` | Unprotected | none | One request | Nothing deleted |
-| Any | `wipe` | Empty | none | Both stores cleared in one transaction | Nothing cleared: `vault › wipe is one transaction…` |
+| Any | `wipe` | Empty | none | Both stores, every scope, cleared in one transaction: `vault › wipe removes the keys of every scope and the header in one transaction` | Nothing cleared: `vault › wipe is one transaction…` |
 
 ### 5.1 Enabling protection
 
@@ -199,7 +201,7 @@ stateDiagram-v2
 
 ### 5.4 Wipe
 
-`wipe()` clears the header and every key in one transaction: `vault › wipe removes every key and the vault header; the next generate starts a new vault`. The next `generate()` creates a new wrapping key pair, so nothing sealed before the wipe can be opened afterwards. `generate` re-reads the header inside its write transaction, so a key sealed to the wiped vault can't land (not tested until the multi-tab slice). Wipe doesn't erase what the storage engine has not yet overwritten on disk.
+`wipe()` clears the header and every key of every scope in one transaction: `vault › wipe removes the keys of every scope…`, `vault › wipe removes every key and the vault header; the next generate starts a new vault`. The next `generate()` creates a new wrapping key pair, so nothing sealed before the wipe can be opened afterwards. `generate` re-reads the header inside its write transaction, so a key sealed to the wiped vault can't land (not tested until the multi-tab slice). Wipe doesn't erase what the storage engine has not yet overwritten on disk.
 
 ## 6. Concurrency and crash safety
 
@@ -210,7 +212,7 @@ A transaction ends once control returns to the event loop with no request pendin
 | Multi-record changes are atomic | One transaction per change; a throwing body aborts it | `vault › the first generate writes header and key atomically…` |
 | No lost updates | Readwrite transactions on overlapping stores run one at a time across tabs. `generate` re-reads the header inside its write transaction and adds only if the header is the one it sealed to; otherwise it redoes the whole operation. It tries 3 times in total, then fails with `unavailable`. | `src/vault.ts` `#commitKeyRecord`, `untilUnchanged`; multi-tab tests not written yet |
 | Concurrent first-time setup converges | The header is added only if absent, inside the write transaction; the loser redoes against the winner's header | `src/vault.ts` `#headerForWrite`, `#commitKeyRecord`; multi-tab tests not written yet |
-| A call in flight across `close()` | The connection is taken right before each transaction, after re-checking `close()` | `vault › a call in flight when the vault is closed fails with InvalidStateError…` |
+| A call in flight across `close()` | A vault and its scopes share one connection (`src/connection.ts`), taken right before each transaction, after re-checking `close()` | `vault › a call in flight when the vault is closed fails with InvalidStateError…`, `› scope() after close() throws InvalidStateError…` |
 | A stale context can't undo a wipe | As above: a write sealed to a wiped header fails its check | `src/vault.ts` `#commitKeyRecord`; multi-tab tests not written yet |
 | Other contexts learn about changes | Not built yet | |
 
@@ -221,12 +223,16 @@ A transaction ends once control returns to the event loop with no request pendin
 ```ts
 class Vault {
   static open(options?: { name?: string }): Promise<Vault>;
+  scope(name: string): Scope;                          // synchronous, no I/O
+  wipe(): Promise<void>;                               // every scope
+  close(): void;                                       // ends every scope too
+}
+interface Scope {
+  readonly name: string;
   generate(type: KeyTypeName): Promise<KeyInfo>;      // never prompts
-  list(): Promise<KeyInfo[]>;                          // oldest first, never prompts
+  list(): Promise<KeyInfo[]>;                          // this scope only, oldest first, never prompts
   sign(id: string, data: Uint8Array): Promise<Signature>;
   delete(id: string): Promise<void>;                   // missing key: no-op
-  wipe(): Promise<void>;
-  close(): void;
 }
 type KeyTypeName = 'ed25519';
 interface KeyInfo { id: string; type: KeyTypeName; publicKey: Uint8Array; createdAt: Date }
@@ -234,7 +240,7 @@ type Signature = { type: 'ed25519'; bytes: Uint8Array };   // one member per key
 class VaultError extends Error { code: VaultErrorCode; retryable: boolean }
 ```
 
-How the types prevent misuse: `generate` accepts only registered key type names. `Signature` is a union discriminated by `type`, so a key type with a different signature shape (a passkey assertion) is another member, not a breaking change. There is no method that returns private key material.
+How the types prevent misuse: every key operation is a method of a `Scope`, so a key operation without a scope can't be written. A `Scope` exposes its name and the four key operations, nothing vault-wide, and its name can't be reassigned: `vault › a Scope has no path to its Vault…`. `generate` accepts only registered key type names. `Signature` is a union discriminated by `type`, so a key type with a different signature shape (a passkey assertion) is another member, not a breaking change. There is no method that returns private key material.
 
 ### 7.2 Usage examples
 
@@ -242,21 +248,22 @@ How the types prevent misuse: `generate` accepts only registered key type names.
 import { Vault, VaultError } from 'vault';
 
 const vault = await Vault.open();
-const key = await vault.generate('ed25519');            // { id, type, publicKey, createdAt }
-const keys = await vault.list();
+const keys = vault.scope('https://app.example');       // a group of keys; no I/O
+const key = await keys.generate('ed25519');            // { id, type, publicKey, createdAt }
+const list = await keys.list();                        // this scope's keys only
 
 const data = new TextEncoder().encode('hello');
-const signature = await vault.sign(key.id, data);
+const signature = await keys.sign(key.id, data);
 
 // Anyone with the public key verifies, without Vault:
 const publicKey = await crypto.subtle.importKey('raw', key.publicKey, 'Ed25519', false, ['verify']);
 await crypto.subtle.verify('Ed25519', publicKey, signature.bytes, data);   // true
 
-await vault.delete(key.id);
-await vault.wipe();
+await keys.delete(key.id);
+await vault.wipe();                                    // every scope
 
 try {
-  await vault.sign(key.id, data);
+  await keys.sign(key.id, data);
 } catch (e) {
   if (e instanceof VaultError && e.code === 'not-found') { /* … */ }
 }
@@ -273,10 +280,10 @@ All failures are `VaultError` with a `code`; `retryable` is true only for `unava
 | Storage written by a newer format | `incompatible` | no | Reload with the newer build. `storage › a database written by a newer format…` |
 | Prompt declined or cancelled | Not built yet | | |
 | Vault locked | Not built yet | | |
-| Key not found | `not-found` | no | Refresh the key list. `vault › signing with an unknown key id fails with not-found` |
+| Key not found, including a key of another scope | `not-found` | no | Refresh the key list. `vault › signing with an unknown key id fails with not-found`, `› a key of another scope is not-found by sign…` |
 | Passkey protection unsupported | Not built yet | | |
 
-Programming errors are not `VaultError`. Use after `close()`, including a call still in flight when it closed, throws a `DOMException` `InvalidStateError`, as IndexedDB does: `vault › a closed vault rejects every call`, `› a call in flight when the vault is closed…`. An unknown key type name passed from JavaScript throws `TypeError`: `vault › an unknown key type is a programming error…`. So does `sign` with `data` that is not a `Uint8Array`. Coercing it would be worse, because `new Uint8Array('hello')` is empty and would be signed as the empty message: `vault › sign rejects data that is not a Uint8Array…`. A non-string `id` passed from JavaScript is not checked: it fails as `unavailable`, which is misleading, but the call still fails, and TypeScript rules it out.
+Programming errors are not `VaultError`. Use after `close()`, including a call still in flight when it closed, throws a `DOMException` `InvalidStateError`, as IndexedDB does: `vault › a closed vault rejects every call`, `› a call in flight when the vault is closed…`. So does `scope()` after `close()`: `vault › scope() after close() throws InvalidStateError…`. A malformed scope name (empty, longer than 1024 code units, not a string, a lone surrogate) throws `TypeError`, so a bug can't create a scope that nothing can address: `vault › a malformed scope name is a TypeError…`. An unknown key type name passed from JavaScript throws `TypeError`: `vault › an unknown key type is a programming error…`. So does `sign` with `data` that is not a `Uint8Array`. Coercing it would be worse, because `new Uint8Array('hello')` is empty and would be signed as the empty message: `vault › sign rejects data that is not a Uint8Array…`. A non-string `id` passed from JavaScript is not checked: it fails as `unavailable`, which is misleading, but the call still fails, and TypeScript rules it out.
 
 ### 7.4 Prompts and user gestures
 
@@ -318,6 +325,8 @@ These WebKit facts come from Playwright's WebKit on Linux. Safari on macOS was n
 
 ## 9. Embedding for other origins (not built)
 
+Scopes are what an embedding layer builds on: it chooses the scope from the sender's origin, which is why a scope name holds up to 1024 code units. The layer itself is not described yet.
+
 <!-- Popup or iframe: the choice, why, and what we give up (storage partitioning, gesture/permission policy, messaging protocol). -->
 
 ## 10. Alternatives considered and rejected
@@ -332,6 +341,9 @@ These WebKit facts come from Playwright's WebKit on Linux. Safari on macOS was n
 | Versioning | Schema version = format version, and `v` in every record | Version in the header only | Re-encrypting migrations can't run in the upgrade callback; per-record versions let them run lazily | One field per record |
 | Concurrency | Crypto first, then one transaction that re-checks the header | Web Locks around read → crypto → write | IndexedDB alone gives atomicity and serialization; no lock is ever held across a passkey prompt | Crypto is wasted on a conflict |
 | `sign` result | Union discriminated by `type` | Bare `Uint8Array`; key handles with methods | Passkey assertions need more than signature bytes; handles go stale across tabs | Callers narrow on `type` |
+| Scopes | `vault.scope(name)` returns a `Scope` with the key operations; `Vault` keeps `open`, `scope`, `wipe`, `close`; all scopes share one connection and wrapping key pair | A `scope` option on every call, defaulting to `'default'` | A call that forgets its scope could be written, and would silently use the shared default; code handed a vault can always wipe it | Two classes instead of one |
+| | | One scope per `Vault.open()` | Each instance would need its own unlock once protection exists, or a hidden global shared between instances | — |
+| | | Scopes as isolation (a secret or a database per scope) | Same-origin code reads all of IndexedDB anyway; isolation between origins belongs to the embedding layer | Wipe and, later, protection are vault-wide |
 | Errors | One `VaultError` with `code` | A subclass per category | Exhaustive `switch`; one export; `instanceof` fails across realms. A string code is easy to send in a message (structured clone keeps neither `code` nor a subclass, so an embedding layer sends `{ code, message }`). | No `instanceof` per category |
 | Lifecycle | The vault is created by its first write; wipe empties it for every instance | Eager creation in `open()`; wipe closes every instance | Reads never write; one rule for wipe | "Wiped" and "never used" are the same state |
 | Keys without a header | `corrupted` in `list`, `generate`, `sign`; only `wipe` recovers | Keep listing them; create a fresh header next to them | A fresh header would turn a deleted protected header into an unprotected vault | A writer who deletes only the header makes the vault unusable until `wipe` |
@@ -351,4 +363,6 @@ These WebKit facts come from Playwright's WebKit on Linux. Safari on macOS was n
 - **One bad record fails all of `list()`** for its scope (fail closed).
 - **An unknown key type is `corrupted`.** A future key type must bump the format version, so older builds see `incompatible` instead.
 - **Concurrency mechanisms (§6) are implemented but not yet tested across tabs**, and other contexts are not notified of changes.
-- Only the `default` scope and the ed25519 key type exist; there are no labels or metadata.
+- **Scopes group keys; they do not isolate same-origin code** (§2.3). Any same-origin code can open any scope.
+- **The scopes of a vault can't be listed, and one scope can't be cleared on its own**: `wipe()` is vault-wide, and a scope's keys go one `delete` at a time.
+- Only the ed25519 key type exists; there are no labels or metadata.

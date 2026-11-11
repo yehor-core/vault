@@ -2,7 +2,7 @@
 
 A browser-native private-key store on top of IndexedDB. Design: [DESIGN.md](DESIGN.md).
 
-> Status: S1. Unprotected vault with ed25519 keys: generate, list, sign, delete, wipe. Keys are encrypted at rest in a versioned storage format, and errors are classified. Not built yet: secp256k1, scopes and labels, multi-tab notifications, passkey keys, passkey protection.
+> Status: S2 in progress. Unprotected vault with ed25519 keys in named scopes: generate, list, sign, delete per scope; wipe for the whole vault. Keys are encrypted at rest in a versioned storage format, and errors are classified. Not built yet: secp256k1, labels, multi-tab notifications, passkey keys, passkey protection.
 
 ## Setup
 
@@ -18,7 +18,7 @@ npx playwright install --with-deps chromium firefox webkit   # --with-deps insta
 | Command | What it does |
 |---|---|
 | `npm run build` | Compiles the library to `dist/` (ES modules and `.d.ts`) |
-| `npm run demo` | Serves the demo page at http://localhost:5173: generate, list, sign (verified with WebCrypto outside Vault), delete, wipe |
+| `npm run demo` | Serves the demo page at http://localhost:5173: generate, list, sign (verified with WebCrypto outside Vault), delete in one fixed scope, `demo`; wipe |
 | `npm run typecheck` | Type checks browser code (`tsconfig.json`, no Node globals) and Node-side config, scripts and e2e tests (`tsconfig.node.json`) |
 | `npm run check:refs` | Checks that every test cited in `DESIGN.md` and `README.md` (`storage › …`) still exists |
 | `npm run test:unit` | Vitest Browser Mode in real Chromium, Firefox and WebKit (`test/unit`) |
@@ -29,8 +29,9 @@ npx playwright install --with-deps chromium firefox webkit   # --with-deps insta
 import { Vault } from 'vault';
 
 const vault = await Vault.open();
-const key = await vault.generate('ed25519');
-const signature = await vault.sign(key.id, new TextEncoder().encode('hello'));
+const keys = vault.scope('https://app.example');   // a named group of keys; synchronous, no I/O
+const key = await keys.generate('ed25519');
+const signature = await keys.sign(key.id, new TextEncoder().encode('hello'));
 ```
 
 ## Browser support
@@ -60,7 +61,7 @@ Unit tests: `test/unit/vault.test.ts` (vault ›), `test/unit/storage.test.ts` (
 | Nothing decrypts without the root key (the sealing really uses ECDH) | storage › encryption at rest › decrypting needs the root key: with another private key in its place, sign fails closed | Chromium, Firefox, WebKit |
 | Format v1 is pinned: key id and AAD of fixed inputs, a key record written by the v1 code still lists and signs, and the default database name is `vault` | records › format v1 regression › keyId of a fixed input is unchanged / keyAad of fixed fields is unchanged / a key record written by the v1 code still lists and signs / the default database name is 'vault' | Chromium, Firefox, WebKit |
 | Records are parsed strictly: an unexpected field on the header, its protection, a key record or its sealed part is `corrupted` | records › strict parsing › an unexpected extra field on … is corrupted (4 cases); › an extra field fails closed through the API too… | Chromium, Firefox, WebKit |
-| Every malformed field is `corrupted`, and the error names the field | records › strict parsing › a malformed header field is corrupted and named: … (6 cases); › a malformed key record field is corrupted and named: … (18 cases, including prototype-named key types and over-long values) | Chromium, Firefox, WebKit |
+| Every malformed field is `corrupted`, and the error names the field | records › strict parsing › a malformed header field is corrupted and named: … (6 cases); › a malformed key record field is corrupted and named: … (22 cases, including prototype-named key types, over-long values and malformed scope names) | Chromium, Firefox, WebKit |
 | A signature verifies under the public key alone, without Vault | vault › keys › a signature verifies under the public key with WebCrypto alone, without Vault; `test/e2e/demo.spec.ts` › demo creates, lists, signs, deletes and wipes keys… (verified again in Node) | Chromium, Firefox, WebKit |
 | An edited id, type, public key or version is caught by `list()`, without any secret | storage › integrity › editing id / type / publicKey / v of a key record fails closed | Chromium, Firefox, WebKit |
 | Any edit to a stored key record fails closed (`corrupted`), and the cases cover every field | storage › integrity › editing \<field\> of a key record fails closed (8 cases); › the edit cases cover every stored field of a key record | Chromium, Firefox, WebKit |
@@ -73,7 +74,7 @@ Unit tests: `test/unit/vault.test.ts` (vault ›), `test/unit/storage.test.ts` (
 | A planted key with a degenerate public key fails closed at `sign()` | storage › integrity › a planted key with a degenerate public key is listed like any added key, and sign fails closed | Chromium, Firefox (skipped in WebKit, where verify crashes the tab: not protected) |
 | Ciphertexts swapped between records fail closed | storage › integrity › ciphertexts swapped between two key records fail closed | Chromium, Firefox, WebKit |
 | A key an attacker sealed to the public wrapping key is rejected, not used | storage › integrity › a key an attacker sealed to the public wrapping key decrypts, but is rejected instead of used | Chromium, Firefox, WebKit |
-| A record moved to another scope is rejected | storage › integrity › a key record moved to another scope is rejected there: its id binds the scope | Chromium, Firefox, WebKit |
+| A record moved to another scope fails closed: at `list()` if its id is kept, at `sign()` if its id is recomputed for the new scope | storage › integrity › a key record moved to another scope fails closed: at list if its id is kept, at sign if it is recomputed | Chromium, Firefox, WebKit |
 | Off-curve ephemeral public keys are rejected on import | storage › integrity › an off-curve ephemeral public key is rejected on import, in every engine | Chromium, Firefox, WebKit (the guard matters in WebKit, the only engine that goes red without it) |
 | Unknown format versions are rejected, not coerced | storage › format versioning › a header with format version 2 / '1' (a string) / true / missing is rejected, not coerced; storage › integrity › editing v…; › changing a field type…: v as the string '1' | Chromium, Firefox, WebKit |
 | Storage written by a newer format is rejected with `incompatible` | storage › format versioning › a database written by a newer format is rejected with incompatible | Chromium, Firefox, WebKit |
@@ -90,7 +91,14 @@ Unit tests: `test/unit/vault.test.ts` (vault ›), `test/unit/storage.test.ts` (
 | A header stored as `undefined` is `corrupted`, not absent and not retryable | vault › errors › a header stored as undefined is corrupted, not absent and not a retryable failure | Chromium, Firefox, WebKit |
 | A database without Vault's stores is `corrupted`, not retryable | vault › errors › a database without Vault stores is corrupted, not a retryable failure | Chromium, Firefox, WebKit |
 | A call in flight across `close()` gets `InvalidStateError`, not a retryable error | vault › lifecycle › a call in flight when the vault is closed fails with InvalidStateError, not a retryable error | Chromium, Firefox, WebKit |
-| A closed vault rejects all five methods | vault › lifecycle › a closed vault rejects every call | Chromium, Firefox, WebKit |
+| A closed vault rejects every call of the vault and of its scopes | vault › lifecycle › a closed vault rejects every call | Chromium, Firefox, WebKit |
+| `scope()` after `close()` throws `InvalidStateError`; closing ends every scope, calls in flight included | vault › scopes › scope() after close() throws InvalidStateError, and closing ends every scope, calls in flight included | Chromium, Firefox, WebKit |
+| Keys of one scope are listed only there; an unused scope lists nothing | vault › scopes › keys generated in one scope are listed only there, and an unused scope lists nothing | Chromium, Firefox, WebKit |
+| A malformed scope name (empty, over 1024 code units, not a string, a lone surrogate) is a `TypeError`; names are compared exactly | vault › scopes › a malformed scope name is a TypeError; a name of 1 to 1024 code units is a scope of its own | Chromium, Firefox, WebKit |
+| A key of another scope is `not-found` for `sign` and untouched by `delete` | vault › scopes › a key of another scope is not-found by sign and untouched by delete | Chromium, Firefox, WebKit |
+| A `Scope` has no path to its `Vault`: code holding only a `Scope` can't wipe or retarget it at another scope | vault › scopes › a Scope has no path to its Vault: it can neither wipe nor be retargeted at another scope | Chromium, Firefox, WebKit |
+| `wipe` clears every scope and the header in one transaction | vault › scopes › wipe removes the keys of every scope and the header in one transaction | Chromium, Firefox, WebKit |
+| S1's fixed scope is the ordinary scope `default`: an S1 record lists and signs there | records › format v1 regression › a key record written by the v1 code still lists and signs | Chromium, Firefox, WebKit |
 | `sign` rejects `data` that is not a `Uint8Array` instead of signing something else (a string would coerce to the empty message) | vault › lifecycle › sign rejects data that is not a Uint8Array instead of signing something else | Chromium, Firefox, WebKit |
 | An unknown key type is a `TypeError` (programming error) | vault › lifecycle › an unknown key type is a programming error (TypeError), not a VaultError | Chromium, Firefox, WebKit |
 | Wipe removes every key and the header; the next vault has a new wrapping key | vault › keys › wipe removes every key and the vault header; the next generate starts a new vault | Chromium, Firefox, WebKit |

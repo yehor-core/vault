@@ -1,5 +1,5 @@
 import { expect, vi } from 'vitest';
-import { Vault, VaultError, type VaultErrorCode } from '../../src/index.ts';
+import { Vault, VaultError, type Scope, type VaultErrorCode } from '../../src/index.ts';
 
 /** Date.now() advancing 1 ms per call, so keys never share a creation millisecond. Restored by vi.restoreAllMocks. */
 export function tickingClock(): void {
@@ -9,15 +9,18 @@ export function tickingClock(): void {
 
 const cleanups: (() => Promise<void>)[] = [];
 
-/** A vault on a fresh, uniquely named database, closed and deleted by `cleanup`. */
-export async function openVault(): Promise<{ vault: Vault; name: string }> {
+/** The scope `openVault` hands out. Not 'default', so code still bound to S1's fixed scope fails the tests. */
+export const TEST_SCOPE = 'test';
+
+/** A vault on a fresh, uniquely named database, and its scope TEST_SCOPE; closed and deleted by `cleanup`. */
+export async function openVault(): Promise<{ vault: Vault; scope: Scope; name: string }> {
   const name = `test-${crypto.randomUUID()}`;
   const vault = await Vault.open({ name });
   cleanups.push(async () => {
     vault.close();
     await done(indexedDB.deleteDatabase(name));
   });
-  return { vault, name };
+  return { vault, scope: vault.scope(TEST_SCOPE), name };
 }
 
 export async function cleanup(): Promise<void> {
@@ -38,7 +41,11 @@ export async function expectVaultError(promise: Promise<unknown>, code: VaultErr
 
 type Store = 'meta' | 'keys';
 
-export async function rawRun<T>(name: string, stores: Store[], body: (tx: IDBTransaction) => IDBRequest<T> | void): Promise<T> {
+export async function rawRun<T>(
+  name: string,
+  stores: Store[],
+  body: (tx: IDBTransaction) => IDBRequest<T> | void,
+): Promise<T> {
   const db = await done(indexedDB.open(name));
   try {
     const tx = db.transaction(stores, 'readwrite');
@@ -56,18 +63,19 @@ export async function rawRun<T>(name: string, stores: Store[], body: (tx: IDBTra
 export const readHeader = (name: string) => rawRun<any>(name, ['meta'], (tx) => tx.objectStore('meta').get('header'));
 export const writeHeader = (name: string, header: unknown) =>
   rawRun(name, ['meta'], (tx) => void tx.objectStore('meta').put(header, 'header'));
-export const deleteHeader = (name: string) => rawRun(name, ['meta'], (tx) => void tx.objectStore('meta').delete('header'));
-export const readKey = (name: string, id: string) =>
-  rawRun<any>(name, ['keys'], (tx) => tx.objectStore('keys').get(['default', id]));
+export const deleteHeader = (name: string) =>
+  rawRun(name, ['meta'], (tx) => void tx.objectStore('meta').delete('header'));
+export const readKey = (name: string, scope: string, id: string) =>
+  rawRun<any>(name, ['keys'], (tx) => tx.objectStore('keys').get([scope, id]));
 export const readAll = async (name: string) => ({
   meta: await rawRun<unknown[]>(name, ['meta'], (tx) => tx.objectStore('meta').getAll()),
   keys: await rawRun<unknown[]>(name, ['keys'], (tx) => tx.objectStore('keys').getAll()),
 });
 
-/** Replaces the stored record of key `id` with `record` (whose own scope and id may differ). */
-export const replaceKey = (name: string, id: string, record: object) =>
+/** Replaces the stored record of key `id` in `scope` with `record` (whose own scope and id may differ). */
+export const replaceKey = (name: string, scope: string, id: string, record: object) =>
   rawRun(name, ['keys'], (tx) => {
-    tx.objectStore('keys').delete(['default', id]);
+    tx.objectStore('keys').delete([scope, id]);
     tx.objectStore('keys').put(record);
   });
 
