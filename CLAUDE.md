@@ -10,7 +10,7 @@ Read these when the step needs them:
 
 ## Workflow
 Roadmap → slice → spec → tickets → one PR per ticket. I start each step.
-1. `/grill-with-docs` on the next planned slice in ROADMAP.md.
+1. Create `S<N>/00-plan` from an up-to-date `main` (see Git), then `/grill-with-docs` on the next planned slice in ROADMAP.md. In each question, state the situation in one plain sentence before any storage or API term, list the options as numbered alternatives, and ask each decision once. A recommendation that rests on the task quotes the TASK.md line. A question answered with `/wait-what` gets re-pitched: a little context, Simplified Technical Russian, the terms of GLOSSARY.md.
 2. `/to-spec` publishes the slice spec as an issue. In ROADMAP.md, set the slice's `Spec: #<n>` and `Status: in progress`.
 3. `/to-tickets` drafts vertical tickets with "Blocked by" and waits for my approval before publishing. Each ticket names the decisions that bind it (`Decision: D-NN`). Put their numbers in the slice's `Tickets:`.
 4. For each ticket on the frontier (open, no open blocker): create the branch (see Git), then `/implement #<issue>`. It runs TDD and commits, then runs `/code-review` on that commit and commits the fixes.
@@ -27,7 +27,7 @@ Roadmap → slice → spec → tickets → one PR per ticket. I start each step.
 - Claude Code hooks (`.claude/hooks/`) run from the main checkout, not the worktree: a merged change to them takes effect only after the main checkout is pulled. Tell me to pull it when such a PR merges.
 - To rebase a ticket branch onto `main`: `git rebase`, then `git push --force-with-lease`. The hook blocks a force-push without a lease and every push to `main`.
 - When the ticket is done: push, then `gh pr create`. Title `S<N>-<NN>: <ticket title>`. Body: `Closes #<issue>` first, then the `/pr` template, then a short `/code-review` summary.
-- The planning records of a slice (what steps 1–3 change in GLOSSARY.md, DECISIONS.md and ROADMAP.md) share one branch, `S<N>/00-plan`, and one PR, opened after `/to-tickets`.
+- The planning records of a slice (what steps 1–3 change in GLOSSARY.md, DECISIONS.md and ROADMAP.md) share one branch, `S<N>/00-plan`, and one PR, opened after `/to-tickets`, titled `S<N> plan: <summary>`.
 
 ## Ticket done means
 1. Every acceptance criterion in the ticket is met.
