@@ -30,12 +30,12 @@ const MAX_ATTEMPTS = 3;
 export interface KeyInfo {
   readonly id: string;
   readonly type: KeyTypeName;
-  /** In the encoding of its key type, which that type's module states. */
+  /** In the encoding of its key type (DESIGN.md §7.5). */
   readonly publicKey: Uint8Array<ArrayBuffer>;
   readonly createdAt: Date;
 }
 
-/** One member per key type; the bytes are in the signature encoding that the type's module states. */
+/** One member per key type; the bytes are in that type's signature encoding (DESIGN.md §7.5). */
 export type Signature = {
   [T in KeyTypeName]: { readonly type: T; readonly bytes: Uint8Array<ArrayBuffer> };
 }[KeyTypeName];
@@ -64,13 +64,13 @@ export class Scope {
     if (!isKeyTypeName(type)) throw new TypeError(`Unknown key type: ${String(type)}`);
     const record = await untilUnchanged(MAX_ATTEMPTS, async () => {
       const { header, isNew } = await this.#headerForWrite();
-      const pair = await generatePair(type);
+      const generated = await generateKey(type);
       try {
-        const record = await this.#prepareKeyRecord(type, header, pair);
+        const record = await this.#prepareKeyRecord(type, header, generated);
         const written = await this.#commitKeyRecord(record, header, isNew);
         return written ? record : undefined;
       } finally {
-        pair.erase(); // stored, or abandoned: a retry generates a fresh pair
+        generated.erase(); // stored, or abandoned: a retry generates a fresh key
       }
     });
     if (!record) throw new VaultError('unavailable', 'The vault kept changing during generate');
@@ -127,11 +127,18 @@ export class Scope {
   }
 
   /** The crypto after generation: derive the id, seal. Outside any transaction: crypto would end it. */
-  async #prepareKeyRecord(type: KeyTypeName, header: HeaderRecord, pair: GeneratedKey): Promise<KeyRecord> {
+  async #prepareKeyRecord(type: KeyTypeName, header: HeaderRecord, generated: GeneratedKey): Promise<KeyRecord> {
     const scope = this.#name;
-    const id = await keyId(scope, type, pair.publicKey);
-    const fields: KeyFields = { v: FORMAT_VERSION, scope, id, type, publicKey: pair.publicKey, createdAt: Date.now() };
-    const sealed = await sealFields(header, fields, pair.seal);
+    const id = await keyId(scope, type, generated.publicKey);
+    const fields: KeyFields = {
+      v: FORMAT_VERSION,
+      scope,
+      id,
+      type,
+      publicKey: generated.publicKey,
+      createdAt: Date.now(),
+    };
+    const sealed = await sealFields(header, fields, generated.seal);
     return { ...fields, sealed };
   }
 
@@ -154,7 +161,7 @@ export class Scope {
   }
 }
 
-async function generatePair(type: KeyTypeName): Promise<GeneratedKey> {
+async function generateKey(type: KeyTypeName): Promise<GeneratedKey> {
   return keyTypes[type].generate().catch((cause: unknown) => {
     throw new VaultError('unavailable', 'The browser failed to generate a key', { cause });
   });

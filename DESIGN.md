@@ -140,7 +140,7 @@ Code layout:
 | `v` is the number 1, never coerced (header and key records) | every read | `corrupted`: `storage › a header with format version 2 / '1' / true / undefined…`, `› editing v…`, `› changing a field type…: v as the string '1'` |
 | Header fields have their exact types: wrapping public key bytes, a known protection kind, a CryptoKey root. A header key whose value is `undefined` (or `null`, which WebKit returns for an unreadable value) is malformed, not absent. | `list`, `generate`, `sign` | `corrupted`: `records › a malformed header field…`, `vault › a header stored as undefined…`, `storage › a tampered wrapping public key makes generate fail closed…` |
 | Key records without a header mean a deleted header, never a new vault: only `wipe()` works | `list`, `generate`, `sign` (`src/storage.ts` `readHeader`) | `corrupted`: `vault › key records without a vault header are corrupted everywhere…` |
-| Key record fields have their exact types: a well-formed scope name of 1 to 1024 code units, an id string, a registered type, the public key a `Uint8Array` that is a valid public key of that type (ed25519: 32 bytes), createdAt a safe non-negative integer, sealed fields `Uint8Array`, a 12-byte IV | `list`, `sign`, without any secret | `corrupted`: `records › a malformed key record field…`, `storage › changing a field type…`, `› a negative createdAt…`, `› a planted key whose public key is not valid for its type…` |
+| Key record fields have their exact types: a well-formed scope name of 1 to 1024 code units, an id string, a registered type, the public key a `Uint8Array` that passes its type's public-key check (ed25519: 32 bytes), createdAt a safe non-negative integer, sealed fields `Uint8Array`, a 12-byte IV | `list`, `sign`, without any secret | `corrupted`: `records › a malformed key record field…`, `storage › changing a field type…`, `› a negative createdAt…`, `› a planted key whose public key is not valid for its type…` |
 | Id matches the hash of scope, type and public key | `list`, `sign`, without any secret | `corrupted`: `storage › editing id / type / publicKey…` |
 | Ephemeral key imports as SPKI → AES-GCM decrypt with AAD → sign → verify against the stored public key | `sign` | `corrupted`: `storage › an off-curve ephemeral public key…`, `› ciphertexts swapped…`, `› a key an attacker sealed…`, `› decrypting needs the root key…` |
 | Only the fields Vault writes: any other own field on the header, its protection, a key record or its sealed part is rejected | `list`, `generate`, `sign` | `corrupted` ("`<record>: unexpected field <name>`"): `records › an unexpected extra field on …`, `› an extra field fails closed through the API…` |
@@ -291,7 +291,7 @@ Programming errors are not `VaultError`. Use after `close()`, including a call s
 
 ### 7.5 Adding a key type
 
-A new sealed key type is one module in `src/key-types/` that implements `KeyType`, and one entry in the `keyTypes` registry (`src/key-types.ts`). Nothing in the core changes: `KeyTypeName`, `KeyInfo` and `Signature` gain its member from the registry, and the core reaches type-specific behaviour only through the interface. A test reads the source of every other file in `src/` and fails if one names a registered key type: `key-types › no core file names a registered key type`. The test suite follows the same rule: every test about keys runs once per registered type, and the type-specific inputs live in one table in `test/unit/helpers.ts`, typed by the registry, so a new entry doesn't compile until it has its inputs and then gets every run.
+A new sealed key type is one module in `src/key-types/` that implements `KeyType`, and one entry in the `keyTypes` registry (`src/key-types.ts`). Nothing in the core changes: `KeyTypeName`, `KeyInfo` and `Signature` gain its member from the registry, and the core reaches type-specific behaviour only through the interface. A test reads the source of every other file in `src/` and fails if one names a registered key type: `key-types › no core file names a registered key type`. Every test about keys runs once per registered type, from one table of type-specific inputs in `test/unit/helpers.ts`.
 
 ```ts
 interface KeyType {
@@ -306,6 +306,10 @@ interface GeneratedKey {
   erase(): void;   // called once the key is stored or abandoned, on every path of generate
 }
 ```
+
+| Key type | Public key | Signature |
+|---|---|---|
+| `ed25519` | 32 bytes, RFC 8032 encoding | 64 bytes, RFC 8032, over the exact bytes passed to `sign` |
 
 The core hands the type an AES-GCM key bound to the record (`Cipher`), and the type decides how its private key is sealed: ed25519 uses `wrapKey` (`src/key-types/ed25519.ts`), so it has no secret buffer to erase.
 

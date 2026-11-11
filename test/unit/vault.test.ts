@@ -257,6 +257,7 @@ describe.each(keyTypeCases)('$type', ({ type, publicKeyLength, signatureLength, 
     test('a write that aborts at commit, after its body returned, fails as unavailable and stores nothing', async () => {
       const { scope } = await openVault();
       // The same key pair twice gives the same id, so the second add fails asynchronously with ConstraintError.
+      // The second seal runs after the first erase; the write fails on the id whatever it seals.
       const pair = await keyTypes[type].generate();
       vi.spyOn(keyTypes[type], 'generate').mockResolvedValue(pair);
       const first = await scope.generate(type);
@@ -294,6 +295,15 @@ describe.each(keyTypeCases)('$type', ({ type, publicKeyLength, signatureLength, 
 
       await vault.wipe();
       await expect(scope.generate(type)).resolves.toMatchObject({ type });
+    });
+
+    test('a key generation that keeps failing is retryable unavailable, and stores nothing', async () => {
+      const { scope, name } = await openVault();
+      vi.spyOn(keyTypes[type], 'generate').mockRejectedValue(new DOMException('simulated', 'OperationError'));
+
+      const error = await expectVaultError(scope.generate(type), 'unavailable');
+      expect(error.cause).toMatchObject({ name: 'OperationError' });
+      expect(await readAll(name)).toEqual({ meta: [], keys: [] });
     });
 
     test('a header stored as undefined is corrupted, not absent and not a retryable failure', async () => {

@@ -202,7 +202,11 @@ describe.each(keyTypeCases)('$type', ({ type, signatureLength, invalidPublicKeys
         const seen = { erased: 0 };
         pairs.push(seen);
         await during();
-        return { ...pair, erase: () => void (seen.erased++, pair.erase()) };
+        const erase = () => {
+          seen.erased++;
+          pair.erase();
+        };
+        return { ...pair, erase };
       });
       return pairs;
     }
