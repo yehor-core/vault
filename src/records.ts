@@ -101,9 +101,16 @@ function readPublicKey(value: unknown, name: string, type: KeyTypeName): Bytes {
   return bytes;
 }
 
+/** Lowercase letters, digits and hyphens, 1 to 32 characters: the names a key type may take (D-21). */
+const KEY_TYPE_NAME = /^[a-z0-9-]{1,32}$/;
+
+/** A well-formed name this build doesn't know was written by a newer build: incompatible, not corrupted (D-21). */
 function readKeyType(value: unknown, name: string): KeyTypeName {
-  if (!isKeyTypeName(value)) throw corrupted(name);
-  return value;
+  if (isKeyTypeName(value)) return value;
+  if (isString(value) && KEY_TYPE_NAME.test(value)) {
+    throw new VaultError('incompatible', `Storage holds a key type this build does not know: ${value}`);
+  }
+  throw corrupted(name);
 }
 
 function readCryptoKey(value: unknown, name: string): CryptoKey {
@@ -152,8 +159,9 @@ function parseSealed(value: unknown): Sealed {
 function parseKeyShape(value: unknown): KeyRecord {
   const key = readObject(value, 'key');
   const v = readVersion(key.v, 'key.v');
-  assertOnlyFields(key, 'key', ['v', 'scope', 'id', 'type', 'publicKey', 'createdAt', 'label', 'sealed']);
+  // Before the rest: a newer key type may have fields of its own (D-21).
   const type = readKeyType(key.type, 'key.type');
+  assertOnlyFields(key, 'key', ['v', 'scope', 'id', 'type', 'publicKey', 'createdAt', 'label', 'sealed']);
   return {
     v,
     scope: readScopeName(key.scope, 'key.scope'),

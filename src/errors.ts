@@ -3,7 +3,10 @@ export type VaultErrorCode =
   | 'unavailable'
   /** A stored record is malformed, tampered with, or does not decrypt or verify. Vault never repairs it. */
   | 'corrupted'
-  /** Storage was written by a newer Vault format. This build neither reads nor changes it. */
+  /**
+   * Storage was written by a newer Vault build: a newer format, or a key type this build doesn't know.
+   * This build neither reads nor changes it; reload a newer build.
+   */
   | 'incompatible'
   /** No key with this id. */
   | 'not-found';
