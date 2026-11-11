@@ -1,6 +1,6 @@
 import { base64url, encode, isBytes, isString, isUint, type Bytes } from './bytes.ts';
 import { VaultError } from './errors.ts';
-import { isKeyTypeName, keyTypes, type KeyTypeName } from './key-types.ts';
+import { isKeyTypeName, isWellFormedKeyTypeName, keyTypes, type KeyTypeName } from './key-types.ts';
 import { IV_LENGTH, type Sealed } from './seal.ts';
 
 /** Storage format version, and also the IndexedDB schema version: a newer format always bumps both. */
@@ -101,14 +101,11 @@ function readPublicKey(value: unknown, name: string, type: KeyTypeName): Bytes {
   return bytes;
 }
 
-/** Lowercase letters, digits and hyphens, 1 to 32 characters: the names a key type may take (D-21). */
-const KEY_TYPE_NAME = /^[a-z0-9-]{1,32}$/;
-
 /** A well-formed name this build doesn't know was written by a newer build: incompatible, not corrupted (D-21). */
 function readKeyType(value: unknown, name: string): KeyTypeName {
   if (isKeyTypeName(value)) return value;
-  if (isString(value) && KEY_TYPE_NAME.test(value)) {
-    throw new VaultError('incompatible', `Storage holds a key type this build does not know: ${value}`);
+  if (isWellFormedKeyTypeName(value)) {
+    throw new VaultError('incompatible', `Storage written by a newer build: ${name} ${value} is not known here`);
   }
   throw corrupted(name);
 }

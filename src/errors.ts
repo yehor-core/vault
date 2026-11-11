@@ -5,7 +5,7 @@ export type VaultErrorCode =
   | 'corrupted'
   /**
    * Storage was written by a newer Vault build: a newer format, or a key type this build doesn't know.
-   * This build neither reads nor changes it; reload a newer build.
+   * This build doesn't read it; reload a newer build. (`delete` still removes a key of an unknown type.)
    */
   | 'incompatible'
   /** No key with this id. */

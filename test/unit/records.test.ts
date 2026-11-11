@@ -6,6 +6,7 @@ import {
   done,
   expectVaultError,
   keyRef,
+  keyTypeCases,
   openVault,
   rawRun,
   readHeader,
@@ -315,21 +316,24 @@ describe('strict parsing', () => {
     }
   });
 
-  test('a key of an unknown type is incompatible at list and sign in its scope; other scopes and wipe still work', async () => {
-    const { vault, scope, name } = await openVault();
-    const other = vault.scope('other');
-    const [key, otherKey] = [await scope.generate('ed25519'), await other.generate('ed25519')];
-    const record = await readKey(name, scope.name, key.id);
-    await replaceKey(name, scope.name, key.id, { ...record, type: 'p256' });
+  test.each(keyTypeCases)(
+    'a key of an unknown type is incompatible at list and sign in its scope; other scopes and wipe still work: $type',
+    async ({ type }) => {
+      const { vault, scope, name } = await openVault();
+      const other = vault.scope('other');
+      const [key, otherKey] = [await scope.generate(type), await other.generate(type)];
+      const record = await readKey(name, scope.name, key.id);
+      await replaceKey(name, scope.name, key.id, { ...record, type: 'p256' });
 
-    await expectVaultError(scope.list(), 'incompatible');
-    await expectVaultError(scope.sign(key, new Uint8Array(1)), 'incompatible');
-    expect(await other.list()).toEqual([otherKey]);
-    expect((await other.sign(otherKey, new Uint8Array(1))).type).toBe('ed25519');
+      await expectVaultError(scope.list(), 'incompatible');
+      await expectVaultError(scope.sign(key, new Uint8Array(1)), 'incompatible');
+      expect(await other.list()).toEqual([otherKey]);
+      expect((await other.sign(otherKey, new Uint8Array(1))).type).toBe(type);
 
-    await vault.wipe();
-    expect(await scope.list()).toEqual([]);
-  });
+      await vault.wipe();
+      expect(await scope.list()).toEqual([]);
+    },
+  );
 
   test('an extra field fails closed through the API too, for the header and for a key record', async () => {
     const { scope, name, header, record } = await storedRecords();
