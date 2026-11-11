@@ -1,0 +1,9 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "categories": { "correctness": "off" },
+  "plugins": ["typescript"],
+  "rules": {
+    "typescript/no-non-null-assertion": "error"
+  },
+  "ignorePatterns": ["dist/", "node_modules/", ".vitest/"]
+}

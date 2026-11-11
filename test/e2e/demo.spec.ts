@@ -1,6 +1,9 @@
 import { expect, test } from '@playwright/test';
 
-const fromHex = (hex: string) => Uint8Array.from(hex.match(/../g)!, (byte) => parseInt(byte, 16));
+function fromHex(hex: string | null): Uint8Array<ArrayBuffer> {
+  if (hex === null) throw new Error('attribute missing');
+  return Uint8Array.from(hex.match(/../g) ?? [], (byte) => parseInt(byte, 16));
+}
 
 test('demo page runs its TypeScript module in a secure context', async ({ page }) => {
   await page.goto('/');
@@ -27,14 +30,10 @@ test('demo creates, lists, signs, deletes and wipes keys, and its signatures ver
   await expect(output).toHaveAttribute('data-verified', 'true');
 
   // Node's WebCrypto, the public key and the signature: no Vault, no browser.
-  const publicKey = await crypto.subtle.importKey(
-    'raw',
-    fromHex((await rows.nth(0).getAttribute('data-public-key'))!),
-    'Ed25519',
-    false,
-    ['verify'],
-  );
-  const signature = fromHex((await output.getAttribute('data-signature'))!);
+  const publicKeyHex = await rows.nth(0).getAttribute('data-public-key');
+  const publicKey = await crypto.subtle.importKey('raw', fromHex(publicKeyHex), 'Ed25519', false, ['verify']);
+  const signatureHex = await output.getAttribute('data-signature');
+  const signature = fromHex(signatureHex);
   expect(
     await crypto.subtle.verify('Ed25519', publicKey, signature, new TextEncoder().encode('signed in an e2e test')),
   ).toBe(true);
