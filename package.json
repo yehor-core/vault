@@ -19,7 +19,8 @@
     "check:refs": "node scripts/check-test-refs.ts",
     "lint": "oxlint",
     "break-check": "node scripts/break-check.ts",
-    "test": "npm run test:unit && npm run test:e2e",
+    "test": "npm run test:scripts && npm run test:unit && npm run test:e2e",
+    "test:scripts": "node --test scripts/*.test.ts",
     "test:unit": "vitest run",
     "test:e2e": "playwright test",
     "prepare": "husky"
