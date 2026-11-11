@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, describe, expect, expectTypeOf, test, vi } from 'vitest';
 import { keyTypes } from '../../src/key-types.ts';
-import { Vault } from '../../src/index.ts';
+import { Vault, type KeyInfo, type Signature } from '../../src/index.ts';
 import {
   cleanup,
   deleteHeader,
@@ -369,6 +369,37 @@ describe.each(keyTypeCases)('$type', ({ type, publicKeyLength, signatureLength, 
       await expectVaultError(scope.generate(type), 'corrupted');
     });
   });
+});
+
+// Both key types by name: the narrowing is static, so each type is written out.
+test('the type of a signature follows the type of the key passed to sign', async () => {
+  const { scope } = await openVault();
+  const [ed, k1] = [await scope.generate('ed25519'), await scope.generate('secp256k1')];
+  if (ed.type !== 'ed25519' || k1.type !== 'secp256k1') throw new Error('generate returned another type');
+  const signAny = (key: KeyInfo) => scope.sign(key, message); // a parameter: TypeScript can't narrow it
+
+  const [edSignature, k1Signature, anySignature] = [
+    await scope.sign(ed, message),
+    await scope.sign(k1, message),
+    await signAny(k1),
+  ];
+
+  expectTypeOf(edSignature).toEqualTypeOf<Signature<'ed25519'>>();
+  expectTypeOf(k1Signature).toEqualTypeOf<Signature<'secp256k1'>>();
+  expectTypeOf(anySignature).toEqualTypeOf<Signature>();
+  expect([edSignature.type, k1Signature.type, anySignature.type]).toEqual(['ed25519', 'secp256k1', 'secp256k1']);
+});
+
+// secp256k1's own behaviour. 64 signatures: without low-S, each is high with probability 1/2.
+test('every secp256k1 signature is low-S, checked without the curve library', async () => {
+  const order = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
+  const { scope } = await openVault();
+  const key = await scope.generate('secp256k1');
+  for (let i = 0; i < 64; i++) {
+    const signature = await scope.sign(key, new TextEncoder().encode(`message ${i}`));
+    const s = BigInt(`0x${signature.bytes.subarray(32).toHex()}`);
+    expect(s > 0n && s <= order >> 1n, `signature ${i}`).toBe(true);
+  }
 });
 
 describe('lifecycle', () => {

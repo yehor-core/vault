@@ -1,3 +1,4 @@
+import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { expect, vi } from 'vitest';
 import { Vault, VaultError, type KeyInfo, type KeyTypeName, type Scope, type VaultErrorCode } from '../../src/index.ts';
 
@@ -17,6 +18,12 @@ export interface KeyTypeCase {
   /** Starts recording the private keys Vault generates; the function it returns reads their raw bytes. */
   recordPrivateKeys(): () => Promise<Uint8Array[]>;
 }
+
+// The secp256k1 generator G (SEC 2 §2.4.1), the public key of the scalar 1.
+// prettier-ignore
+export const SECP256K1_G = Uint8Array.fromHex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798');
+// prettier-ignore
+const SECP256K1_G_UNCOMPRESSED = Uint8Array.fromHex('0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8');
 
 // The only place tests hold type-specific inputs. Typed by the registry: a new key type fails to compile
 // until it has an entry here, and then every per-type test runs for it.
@@ -45,7 +52,41 @@ const keyTypeCaseByName: { [T in KeyTypeName]: KeyTypeCase & { readonly type: T 
         );
     },
   },
+  secp256k1: {
+    type: 'secp256k1',
+    publicKeyLength: 33,
+    signatureLength: 64,
+    // noble is not Vault's code. lowS: false, so low-S is proven by its own test, not by every verify.
+    async verify(publicKey, signature, data) {
+      return secp256k1.verify(signature, data, publicKey, { prehash: true, lowS: false, format: 'compact' });
+    },
+    invalidPublicKeys: [
+      { label: '32 bytes', bytes: SECP256K1_G.slice(1) },
+      { label: '34 bytes', bytes: Uint8Array.of(...SECP256K1_G, 0) },
+      { label: 'empty', bytes: new Uint8Array() },
+      { label: 'uncompressed form', bytes: SECP256K1_G_UNCOMPRESSED },
+      { label: 'prefix 0x04 at 33 bytes', bytes: Uint8Array.of(4, ...SECP256K1_G.slice(1)) },
+      { label: 'an x with no point', bytes: Uint8Array.of(2, ...new Uint8Array(31), 5) }, // 5³ + 7 is no square mod p
+    ],
+    recordPrivateKeys() {
+      // Vault seals a secp256k1 key by encrypting its raw scalar. Copied at the call: Vault erases it afterwards.
+      const encrypt = crypto.subtle.encrypt.bind(crypto.subtle);
+      const scalars: Uint8Array[] = [];
+      vi.spyOn(crypto.subtle, 'encrypt').mockImplementation(async (algorithm, key, data) => {
+        scalars.push(bufferBytes(data).slice());
+        return encrypt(algorithm, key, data);
+      });
+      return async () => scalars;
+    },
+  },
 };
+
+/** The views a BufferSource covers, without copying. */
+function bufferBytes(source: BufferSource): Uint8Array {
+  return ArrayBuffer.isView(source)
+    ? new Uint8Array(source.buffer, source.byteOffset, source.byteLength)
+    : new Uint8Array(source);
+}
 
 /** One case per registered key type: `describe.each(keyTypeCases)`. */
 export const keyTypeCases: readonly KeyTypeCase[] = Object.values(keyTypeCaseByName);

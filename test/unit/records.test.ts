@@ -109,6 +109,73 @@ describe('format v1 regression', () => {
   });
 });
 
+// Produced once by the S2 code (in Node): a secp256k1 key record in the 'default' scope, its sealed scalar, and the
+// signature of a fixed message. Deterministic nonces make the signature a known answer too.
+// prettier-ignore
+const SECP256K1_RECORD = {
+  wrappingPkcs8:
+    '308187020100301306072a8648ce3d020106082a8648ce3d030107046d306b020101042049eceb65ed5e3c3013d3887db9c476a9cd10aafa257ce9115c24bee49e551a9aa1440342000458b920f0841a41c4cb79e6d20ce1a5b7ac897b7ba85e8a4ebe81742bedd62452f657e3526e8aea0141bb77311dead441639c63bcf5fb915b3992b836cafc23be',
+  wrappingSpki:
+    '3059301306072a8648ce3d020106082a8648ce3d0301070342000458b920f0841a41c4cb79e6d20ce1a5b7ac897b7ba85e8a4ebe81742bedd62452f657e3526e8aea0141bb77311dead441639c63bcf5fb915b3992b836cafc23be',
+  id: 'dLhw1RMiQfGmz1X1xd7Q5x_qAwH9tIyVxWN5-2iDzcI',
+  publicKey: '037a99b5f9ce1c6fe48749fc027cb2721884c7b725c017947fb13b881cec2d5dec',
+  createdAt: 1762473600000,
+  ephemeralPublicKey:
+    '3059301306072a8648ce3d020106082a8648ce3d030107034200041c0f45a1721287cae07355453d4481f7000340e9ea4ea00841d2625fc23eb21fdeef6ecfd60f3b49ec208c91d035030bf16fa33b7a774a71d7d3fa75313a1806',
+  iv: 'b8c6d3f140ec301f25c10781',
+  ciphertext:
+    'ae8f76ff944f0e00a126207f5ad9a9f34106cf84dcef853a5d802835f5bdb8eb14fb7d21267374a90726e4ca24e88c2b',
+  message: 'signed by a secp256k1 record',
+  signature:
+    'f7e8aa93a685596778c8be9f60e135423b7e3c2f5b2f6831eb55d1ece434b9280b4d0023b0be48c0b65417564c7d1231a04b5e040e5e8c5b8f8d57cdd096bf5b',
+};
+
+describe('format: secp256k1 known answer', () => {
+  test('a stored secp256k1 key record lists and gives the expected signature', async () => {
+    const { vault, name } = await openVault();
+    const scope = vault.scope('default');
+    const r = SECP256K1_RECORD;
+    const root = await crypto.subtle.importKey(
+      'pkcs8',
+      bytes(r.wrappingPkcs8),
+      { name: 'ECDH', namedCurve: 'P-256' },
+      false,
+      ['deriveKey'],
+    );
+    const header = { v: 1, wrappingPublicKey: bytes(r.wrappingSpki), protection: { kind: 'none', privateKey: root } };
+    const sealed = {
+      ephemeralPublicKey: bytes(r.ephemeralPublicKey),
+      iv: bytes(r.iv),
+      ciphertext: bytes(r.ciphertext),
+    };
+    const record = {
+      v: 1,
+      scope: 'default',
+      id: r.id,
+      type: 'secp256k1',
+      publicKey: bytes(r.publicKey),
+      createdAt: r.createdAt,
+      sealed,
+    };
+    await rawRun(name, ['meta', 'keys'], (tx) => {
+      tx.objectStore('meta').put(header, 'header');
+      tx.objectStore('keys').put(record);
+    });
+
+    expect(await scope.list()).toEqual([
+      {
+        id: r.id,
+        scope: 'default',
+        type: 'secp256k1',
+        publicKey: bytes(r.publicKey),
+        createdAt: new Date(r.createdAt),
+      },
+    ]);
+    const signature = await scope.sign(keyRef(scope, r.id, 'secp256k1'), new TextEncoder().encode(r.message));
+    expect(signature).toEqual({ type: 'secp256k1', bytes: bytes(r.signature) });
+  });
+});
+
 /** A real header and key record, as Vault stored them. */
 async function storedRecords() {
   const { scope, name } = await openVault();
@@ -158,7 +225,7 @@ describe('strict parsing', () => {
     ['scope of 1025 code units', 'key.scope', (r) => ({ ...r, scope: 'x'.repeat(1025) })],
     ['scope with a lone surrogate', 'key.scope', (r) => ({ ...r, scope: '\uD800' })],
     ['id as a number', 'key.id', (r) => ({ ...r, id: 1 })],
-    ['unknown type', 'key.type', (r) => ({ ...r, type: 'secp256k1' })],
+    ['unknown type', 'key.type', (r) => ({ ...r, type: 'p256' })],
     ["type 'constructor' (inherited, not registered)", 'key.type', (r) => ({ ...r, type: 'constructor' })],
     ["type '__proto__'", 'key.type', (r) => ({ ...r, type: '__proto__' })],
     ["type 'toString'", 'key.type', (r) => ({ ...r, type: 'toString' })],

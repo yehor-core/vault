@@ -4,7 +4,7 @@ import { base64url, encode, type Bytes } from '../../src/bytes.ts';
 import { keyTypes, type KeyTypeName } from '../../src/key-types.ts';
 import { Vault, type VaultErrorCode } from '../../src/index.ts';
 import { keyAad, keyId, type KeyFields } from '../../src/records.ts';
-import { generateWrappingKey, importPublicKey, seal, unseal } from '../../src/seal.ts';
+import { generateWrappingKey, importPublicKey, seal, unseal, type Cipher } from '../../src/seal.ts';
 import {
   cleanup,
   done,
@@ -18,6 +18,7 @@ import {
   readHeader,
   readKey,
   replaceKey,
+  SECP256K1_G,
   tickingClock,
   writeHeader,
 } from './helpers.ts';
@@ -45,8 +46,17 @@ function contains(haystack: Uint8Array, needle: Uint8Array): boolean {
   return false;
 }
 
-/** Adds a self-consistent key record with the given public key, as any storage writer can: no secret needed. */
-async function plantKey(name: string, scope: string, type: KeyTypeName, publicKey: Bytes): Promise<string> {
+/**
+ * Adds a self-consistent key record with the given public key, as any storage writer can: no secret needed.
+ * The sealed private key is `encrypt`'s, or else a fresh key of the type.
+ */
+async function plantKey(
+  name: string,
+  scope: string,
+  type: KeyTypeName,
+  publicKey: Bytes,
+  encrypt?: (cipher: Cipher) => Promise<ArrayBuffer>,
+): Promise<string> {
   const header = await readHeader(name);
   const fields: KeyFields = {
     v: 1,
@@ -56,8 +66,11 @@ async function plantKey(name: string, scope: string, type: KeyTypeName, publicKe
     publicKey,
     createdAt: Date.now(),
   };
-  const attacker = await keyTypes[type].generate();
-  const sealed = await seal(header.wrappingPublicKey, keyAad(fields), attacker.seal);
+  const sealed = await seal(
+    header.wrappingPublicKey,
+    keyAad(fields),
+    encrypt ?? (await keyTypes[type].generate()).seal,
+  );
   await rawRun(name, ['keys'], (tx) => void tx.objectStore('keys').put({ ...fields, sealed }));
   return fields.id;
 }
@@ -158,6 +171,101 @@ describe('integrity', () => {
       await expectVaultError(scope.sign(keyRef(scope, id, 'ed25519'), message), 'corrupted');
     },
   );
+});
+
+/** Seals `plaintext` as it stands as a planted key's private key: what a secp256k1 key stores is its raw scalar. */
+const sealPlaintext = (plaintext: Bytes) => (cipher: Cipher) =>
+  crypto.subtle.encrypt(cipher.params, cipher.key, plaintext);
+
+const isZero = (bytes: Uint8Array) => bytes.every((byte) => byte === 0);
+
+// secp256k1's own behaviour.
+describe('secp256k1', () => {
+  const one = Uint8Array.fromHex('0000000000000000000000000000000000000000000000000000000000000001');
+
+  // Deterministic ECDSA (RFC 6979) over SHA-256, from bitcoinjs-lib v3.3.2, test/fixtures/ecdsa.json, valid.ecdsa[0]:
+  // https://github.com/bitcoinjs/bitcoinjs-lib/blob/v3.3.2/test/fixtures/ecdsa.json (its s is already low).
+  test('a published deterministic-ECDSA vector is reproduced exactly', async () => {
+    const { scope, name } = await openVault();
+    await scope.generate('secp256k1'); // creates the vault: planting needs its public wrapping key
+    const id = await plantKey(name, scope.name, 'secp256k1', SECP256K1_G, sealPlaintext(one)); // d = 1, so Q = G
+    const data = new TextEncoder().encode('Everything should be made as simple as possible, but not simpler.');
+
+    const signature = await scope.sign(keyRef(scope, id, 'secp256k1'), data);
+
+    // prettier-ignore
+    expect(signature.bytes.toHex()).toBe(
+      '33a69cd2065432a30f3d1ce4eb0d59b8ab58c74f27c41a7fdb5696ad4e6108c9' +
+      '6f807982866f785d3f6418d24163ddae117b7db4d5fdf0071de069fa54342262',
+    );
+  });
+
+  const invalidScalars: [label: string, scalar: Bytes][] = [
+    ['zero', new Uint8Array(32)],
+    ['the group order n', Uint8Array.fromHex('fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141')],
+    ['above the group order', new Uint8Array(32).fill(0xff)],
+    ['31 bytes', one.slice(1)],
+    ['33 bytes', Uint8Array.of(0, ...one)], // the value 1, one byte too long
+  ];
+
+  test.each(invalidScalars)(
+    'a planted sealed value that is not a valid scalar is corrupted at sign: %s',
+    async (_, scalar) => {
+      const { scope, name } = await openVault();
+      await scope.generate('secp256k1');
+      const id = await plantKey(name, scope.name, 'secp256k1', SECP256K1_G, sealPlaintext(scalar));
+
+      const error = await expectVaultError(scope.sign(keyRef(scope, id, 'secp256k1'), message), 'corrupted');
+      // Vault's own check rejects it, before the curve library or the verify after signing sees it.
+      expect(error.cause).toMatchObject({ message: 'The sealed secp256k1 key is not a valid scalar' });
+    },
+  );
+
+  test('generate erases the seed and the scalar it owns, also when the write fails', async () => {
+    const { scope } = await openVault();
+    const [getRandomValues, encrypt] = [crypto.getRandomValues.bind(crypto), crypto.subtle.encrypt.bind(crypto.subtle)];
+    const seeds: Uint8Array[] = [];
+    vi.spyOn(crypto, 'getRandomValues').mockImplementation((array) => {
+      const filled = getRandomValues(array);
+      // The seed is the one 48-byte draw: the IV is 12 bytes, the curve library's blinding 16.
+      if (filled instanceof Uint8Array && filled.length === 48) seeds.push(filled);
+      return filled;
+    });
+    const scalars: Uint8Array[] = [];
+    vi.spyOn(crypto.subtle, 'encrypt').mockImplementation(async (algorithm, key, data) => {
+      if (data instanceof Uint8Array && !isZero(data)) scalars.push(data); // the live buffer, to see it zeroed
+      return encrypt(algorithm, key, data);
+    });
+
+    await scope.generate('secp256k1');
+    vi.spyOn(IDBObjectStore.prototype, 'add').mockImplementation(() => {
+      throw new DOMException('simulated quota failure', 'QuotaExceededError');
+    });
+    await expectVaultError(scope.generate('secp256k1'), 'unavailable');
+
+    expect(seeds).toHaveLength(2);
+    expect(scalars).toHaveLength(2);
+    for (const buffer of [...seeds, ...scalars]) expect(isZero(buffer)).toBe(true);
+  });
+
+  test('sign erases the decrypted scalar, also when it is rejected', async () => {
+    const { scope, name } = await openVault();
+    const key = await scope.generate('secp256k1');
+    const planted = await plantKey(name, scope.name, 'secp256k1', SECP256K1_G, sealPlaintext(Uint8Array.of(0, ...one)));
+    const decrypt = crypto.subtle.decrypt.bind(crypto.subtle);
+    const decrypted: Uint8Array[] = [];
+    vi.spyOn(crypto.subtle, 'decrypt').mockImplementation(async (...args) => {
+      const plaintext = await decrypt(...args);
+      decrypted.push(new Uint8Array(plaintext));
+      return plaintext;
+    });
+
+    await scope.sign(key, message);
+    await expectVaultError(scope.sign(keyRef(scope, planted, 'secp256k1'), message), 'corrupted');
+
+    expect(decrypted.map((bytes) => bytes.length)).toEqual([32, 33]);
+    for (const buffer of decrypted) expect(isZero(buffer)).toBe(true);
+  });
 });
 
 describe('format versioning', () => {
