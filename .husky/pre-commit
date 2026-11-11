@@ -7,7 +7,8 @@ if git diff --cached --name-only | grep -qv '\.md$'; then
   npm run --silent lint
   npm run --silent typecheck
   # `npm test`, with dot reporters: a passing run prints its summaries, a failing one the failures in full.
-  npm run --silent test:scripts -- --test-reporter=dot
+  # The reporter goes through NODE_OPTIONS: after the file list, node would pass it to the tests as an argument.
+  NODE_OPTIONS=--test-reporter=dot npm run --silent test:scripts
   npm run --silent test:unit -- --reporter=dot
   npm run --silent test:e2e -- --reporter=dot
 fi
