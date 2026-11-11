@@ -10,6 +10,7 @@ import {
   done,
   expectVaultError,
   flipBit,
+  keyRef,
   keyTypeCases,
   openVault,
   rawRun,
@@ -154,7 +155,7 @@ describe('integrity', () => {
       const id = await plantKey(name, scope.name, 'ed25519', identity);
 
       expect((await scope.list()).map((k) => k.id)).toContain(id);
-      await expectVaultError(scope.sign(id, message), 'corrupted');
+      await expectVaultError(scope.sign(keyRef(scope, id, 'ed25519'), message), 'corrupted');
     },
   );
 });
@@ -307,7 +308,7 @@ describe.each(keyTypeCases)('$type', ({ type, signatureLength, invalidPublicKeys
       await writeHeader(name, { ...header, protection: { ...header.protection, privateKey } });
 
       expect((await readHeader(name)).protection.privateKey).toBeInstanceOf(CryptoKey);
-      const error = await expectVaultError(scope.sign(key.id, message), 'corrupted');
+      const error = await expectVaultError(scope.sign(key, message), 'corrupted');
       expect(error.cause).toMatchObject({ name: 'OperationError' }); // AES-GCM authentication failed
     });
   });
@@ -353,8 +354,8 @@ describe.each(keyTypeCases)('$type', ({ type, signatureLength, invalidPublicKeys
 
       if (atList) await expectVaultError(scope.list(), 'corrupted');
       else expect((await scope.list()).map((k) => k.id)).toEqual([target.id, other.id]); // not visible without decrypting
-      await expectVaultError(scope.sign(edited.id, message), 'corrupted');
-      await expect(scope.sign(other.id, message)).resolves.toMatchObject({ type });
+      await expectVaultError(scope.sign({ ...target, id: edited.id }, message), 'corrupted');
+      await expect(scope.sign(other, message)).resolves.toMatchObject({ type });
     });
 
     // Same value, different type: String() or a loose encoding would make these invisible to the id and AAD.
@@ -381,7 +382,7 @@ describe.each(keyTypeCases)('$type', ({ type, signatureLength, invalidPublicKeys
         await replaceKey(name, scope.name, key.id, edit(await readKey(name, scope.name, key.id)));
 
         await expectVaultError(scope.list(), 'corrupted');
-        await expectVaultError(scope.sign(key.id, message), 'corrupted');
+        await expectVaultError(scope.sign(key, message), 'corrupted');
       },
     );
 
@@ -400,7 +401,9 @@ describe.each(keyTypeCases)('$type', ({ type, signatureLength, invalidPublicKeys
         const id = await plantKey(name, scope.name, type, bytes);
 
         await expect(scope.list(), label).rejects.toMatchObject({ code: 'corrupted' });
-        await expect(scope.sign(id, message), label).rejects.toMatchObject({ code: 'corrupted' });
+        await expect(scope.sign(keyRef(scope, id, type), message), label).rejects.toMatchObject({
+          code: 'corrupted',
+        });
         await rawRun(name, ['keys'], (tx) => void tx.objectStore('keys').delete([scope.name, id]));
       }
     });
@@ -419,8 +422,17 @@ describe.each(keyTypeCases)('$type', ({ type, signatureLength, invalidPublicKeys
       const id = await keyId(to.name, record.type, record.publicKey);
       await replaceKey(name, to.name, key.id, { ...record, scope: to.name, id });
       expect((await to.list()).map((k) => k.id)).toEqual([id]);
-      await expectVaultError(to.sign(id, message), 'corrupted');
+      await expectVaultError(to.sign({ ...key, scope: to.name, id }, message), 'corrupted');
       expect(await from.list()).toEqual([]);
+    });
+
+    test('delete removes a record whose stored type was tampered with', async () => {
+      const { scope, name } = await openVault();
+      const key = await scope.generate(type);
+      await replaceKey(name, scope.name, key.id, { ...(await readKey(name, scope.name, key.id)), type: 'TAMPERED' });
+
+      await scope.delete(key);
+      expect((await readAll(name)).keys).toEqual([]);
     });
 
     test('ciphertexts swapped between two key records fail closed', async () => {
@@ -430,8 +442,8 @@ describe.each(keyTypeCases)('$type', ({ type, signatureLength, invalidPublicKeys
       await replaceKey(name, scope.name, a.id, { ...ra, sealed: rb.sealed });
       await replaceKey(name, scope.name, b.id, { ...rb, sealed: ra.sealed });
 
-      await expectVaultError(scope.sign(a.id, message), 'corrupted');
-      await expectVaultError(scope.sign(b.id, message), 'corrupted');
+      await expectVaultError(scope.sign(a, message), 'corrupted');
+      await expectVaultError(scope.sign(b, message), 'corrupted');
     });
 
     test('a key an attacker sealed to the public wrapping key decrypts, but is rejected instead of used', async () => {
@@ -446,7 +458,7 @@ describe.each(keyTypeCases)('$type', ({ type, signatureLength, invalidPublicKeys
 
       const cipher = await unseal(header.protection.privateKey, header.wrappingPublicKey, sealed, keyAad(record));
       await expect(keyTypes[type].sign(sealed.ciphertext, cipher, message)).resolves.toHaveLength(signatureLength);
-      await expectVaultError(scope.sign(key.id, message), 'corrupted');
+      await expectVaultError(scope.sign(key, message), 'corrupted');
     });
 
     test('a tampered wrapping public key makes generate fail closed, not with a raw DataError', async () => {
@@ -470,7 +482,7 @@ describe.each(keyTypeCases)('$type', ({ type, signatureLength, invalidPublicKeys
       const record = await readKey(name, scope.name, key.id);
       const ephemeralPublicKey = flipBit(record.sealed.ephemeralPublicKey);
       await replaceKey(name, scope.name, key.id, { ...record, sealed: { ...record.sealed, ephemeralPublicKey } });
-      const error = await expectVaultError(scope.sign(key.id, message), 'corrupted');
+      const error = await expectVaultError(scope.sign(key, message), 'corrupted');
       expect(error.cause).toMatchObject({ name: 'DataError' });
     });
   });
@@ -489,7 +501,7 @@ describe.each(keyTypeCases)('$type', ({ type, signatureLength, invalidPublicKeys
       await writeHeader(name, { ...(await readHeader(name)), v });
 
       await expectVaultError(scope.list(), 'corrupted');
-      await expectVaultError(scope.sign(key.id, message), 'corrupted');
+      await expectVaultError(scope.sign(key, message), 'corrupted');
       await expectVaultError(scope.generate(type), 'corrupted');
     });
 

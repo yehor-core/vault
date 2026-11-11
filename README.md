@@ -35,7 +35,7 @@ import { Vault } from 'vault';
 const vault = await Vault.open();
 const keys = vault.scope('https://app.example');   // a named group of keys; synchronous, no I/O
 const key = await keys.generate('ed25519');
-const signature = await keys.sign(key.id, new TextEncoder().encode('hello'));
+const signature = await keys.sign(key, new TextEncoder().encode('hello')); // the KeyInfo itself, not its id
 ```
 
 ## Browser support
@@ -100,7 +100,13 @@ Test references: `<name> ›` cites `test/unit/<name>.test.ts`, `e2e ›` cites 
 | `scope()` after `close()` throws `InvalidStateError`; closing ends every scope, calls in flight included | `vault › scopes › scope() after close() throws InvalidStateError, and closing ends every scope, calls in flight included` | Chromium, Firefox, WebKit |
 | Keys of one scope are listed only there; an unused scope lists nothing | `vault › scopes › keys generated in one scope are listed only there, and an unused scope lists nothing` | Chromium, Firefox, WebKit |
 | A malformed scope name (empty, over 1024 code units, not a string, a lone surrogate) is a `TypeError`; names are compared exactly | `vault › scopes › a malformed scope name is a TypeError; a name of 1 to 1024 code units is a scope of its own` | Chromium, Firefox, WebKit |
-| A key of another scope is `not-found` for `sign` and untouched by `delete` | `vault › scopes › a key of another scope is not-found by sign and untouched by delete` | Chromium, Firefox, WebKit |
+| The id of a key of another scope is `not-found` for `sign` and untouched by `delete` | `vault › scopes › the id of a key of another scope is not-found by sign and untouched by delete` | Chromium, Firefox, WebKit |
+| A key passed to a scope it doesn't belong to is a `TypeError` in `sign` and `delete`: not signed with, not deleted | `vault › scopes › a key passed to another scope is a TypeError in sign and delete: not signed with, not deleted` | Chromium, Firefox, WebKit |
+| `sign` and `delete` take a key's public information as returned, a structured clone included | `vault › keys › sign and delete take the public information as returned, a structured clone included` | Chromium, Firefox, WebKit |
+| Only the id, scope and type of the argument count: an edited public key or creation time changes nothing, and the signature verifies under the stored public key | `vault › keys › only the id, scope and type of the argument count: edited public key and creation time change nothing` | Chromium, Firefox, WebKit |
+| An argument whose type differs from the stored key is a `TypeError`, and the key is not deleted | `vault › keys › an argument whose type differs from the stored key is a TypeError, and the key is not deleted` | Chromium, Firefox, WebKit |
+| `delete` removes a record whose stored type was tampered with, as before (only a different registered type is a `TypeError`) | `storage › integrity › delete removes a record whose stored type was tampered with` | Chromium, Firefox, WebKit |
+| An argument that is not an object with a string id (an id string alone included) is a `TypeError` | `vault › keys › an argument that is not an object with a string id is a TypeError in sign and delete` | Chromium, Firefox, WebKit |
 | A `Scope` has no path to its `Vault`: code holding only a `Scope` can't wipe or retarget it at another scope | `vault › scopes › a Scope has no path to its Vault: it can neither wipe nor be retargeted at another scope` | Chromium, Firefox, WebKit |
 | `wipe` clears every scope and the header in one transaction | `vault › scopes › wipe removes the keys of every scope and the header in one transaction` | Chromium, Firefox, WebKit |
 | S1's fixed scope is the ordinary scope `default`: an S1 record lists and signs there | `records › format v1 regression › a key record written by the v1 code still lists and signs` | Chromium, Firefox, WebKit |

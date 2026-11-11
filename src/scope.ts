@@ -26,19 +26,23 @@ import {
 
 const MAX_ATTEMPTS = 3;
 
-/** Public information about a key; readable without unlocking. */
-export interface KeyInfo {
-  readonly id: string;
-  readonly type: KeyTypeName;
-  /** In the encoding of its key type (DESIGN.md §7.5). */
-  readonly publicKey: Uint8Array<ArrayBuffer>;
-  readonly createdAt: Date;
-}
+/** Public information about a key; readable without unlocking. One member per key type. */
+export type KeyInfo = {
+  [T in KeyTypeName]: {
+    readonly id: string;
+    /** The name of the scope the key belongs to. */
+    readonly scope: string;
+    readonly type: T;
+    /** In the encoding of its key type (DESIGN.md §7.5). */
+    readonly publicKey: Uint8Array<ArrayBuffer>;
+    readonly createdAt: Date;
+  };
+}[KeyTypeName];
 
 /** One member per key type; the bytes are in that type's signature encoding (DESIGN.md §7.5). */
-export type Signature = {
-  [T in KeyTypeName]: { readonly type: T; readonly bytes: Uint8Array<ArrayBuffer> };
-}[KeyTypeName];
+export type Signature<T extends KeyTypeName = KeyTypeName> = {
+  [U in T]: { readonly type: U; readonly bytes: Uint8Array<ArrayBuffer> };
+}[T];
 
 /**
  * A named group of keys in a vault, from `vault.scope(name)`. It holds nothing but its name and has no
@@ -87,20 +91,42 @@ export class Scope {
     return records.sort((a, b) => a.createdAt - b.createdAt).map(keyInfo);
   }
 
-  /** Signs `data` with key `id`. The signature verifies under the key's public key, without Vault. */
-  async sign(id: string, data: Uint8Array): Promise<Signature> {
+  /**
+   * Signs `data` with `key`, as returned by `generate` or `list` (a structured clone will do). Only its id,
+   * scope and type are read; the key itself is read from storage. The signature verifies under its public key.
+   */
+  async sign<K extends KeyInfo>(key: K, data: Uint8Array): Promise<Signature<K['type']>> {
+    const { id, type } = this.#readKeyRef(key);
     // Checked, not coerced: new Uint8Array('hello') is empty, so a string would be signed as the empty message.
     if (!(data instanceof Uint8Array)) throw new TypeError('data must be a Uint8Array');
     const message: Bytes = new Uint8Array(data); // the caller may change `data` while we await
     const { header, record } = await this.#loadKey(id);
+    if (record.type !== type) throw typeMismatch(id, record.type);
     const signature = await signWithRecord(header, record, message);
     await assertSignatureMatches(record, signature, message);
-    return { type: record.type, bytes: signature };
+    // `as`: the runtime check above makes record.type K['type'], which TypeScript can't follow.
+    return { type: record.type, bytes: signature } as Signature<K['type']>;
   }
 
-  /** Deletes key `id` of this scope. Deleting a missing key is a no-op. */
-  async delete(id: string): Promise<void> {
-    await this.#connection.transact([KEYS_STORE], 'readwrite', async (tx) => deleteKeyRecord(tx, this.#name, id));
+  /** Deletes `key`, read like `sign` reads it. Deleting a missing key is a no-op. */
+  async delete(key: KeyInfo): Promise<void> {
+    const { id, type } = this.#readKeyRef(key);
+    const otherType = await this.#connection.transact([KEYS_STORE], 'readwrite', async (tx) => {
+      const stored = storedKeyType(await getKeyRecord(tx, this.#name, id));
+      if (stored !== undefined && stored !== type) return stored;
+      deleteKeyRecord(tx, this.#name, id);
+      return undefined;
+    });
+    if (otherType !== undefined) throw typeMismatch(id, otherType);
+  }
+
+  /** The id and type of a `sign` or `delete` argument, which must name a key of this scope. */
+  #readKeyRef(key: unknown): { id: string; type: unknown } {
+    // Destructuring throws TypeError for undefined and null. Read once: a getter can't change between checks.
+    const { id, scope, type } = key as Record<string, unknown>;
+    if (typeof id !== 'string') throw new TypeError('key.id must be a string');
+    if (scope !== this.#name) throw new TypeError(`Key ${id} is not of scope ${this.#name}`);
+    return { id, type };
   }
 
   /** The header and the parsed record of key `id`, read in one transaction. */
@@ -205,5 +231,19 @@ async function createHeader(): Promise<HeaderRecord> {
 }
 
 function keyInfo(record: KeyRecord): KeyInfo {
-  return { id: record.id, type: record.type, publicKey: record.publicKey, createdAt: new Date(record.createdAt) };
+  const { id, scope, type, publicKey } = record;
+  return { id, scope, type, publicKey, createdAt: new Date(record.createdAt) };
+}
+
+/**
+ * The registered key type a stored record names, unparsed: parsing needs crypto, which would end the
+ * transaction. Only compared; a record with no such type is deleted like any other.
+ */
+function storedKeyType(value: unknown): KeyTypeName | undefined {
+  const type = typeof value === 'object' && value !== null ? (value as Record<string, unknown>).type : undefined;
+  return isKeyTypeName(type) ? type : undefined;
+}
+
+function typeMismatch(id: string, stored: KeyTypeName): TypeError {
+  return new TypeError(`Key ${id} is of type ${stored}, not the type given`);
 }

@@ -6,6 +6,7 @@ import {
   deleteHeader,
   done,
   expectVaultError,
+  keyRef,
   keyTypeCases,
   openVault,
   readAll,
@@ -29,6 +30,7 @@ describe.each(keyTypeCases)('$type', ({ type, publicKeyLength, signatureLength, 
       const key = await scope.generate(type);
 
       expect(key.type).toBe(type);
+      expect(key.scope).toBe(scope.name);
       expect(key.id).toMatch(/^[A-Za-z0-9_-]{43}$/);
       expect(key.publicKey).toHaveLength(publicKeyLength);
       expect(key.createdAt.getTime()).toBeGreaterThanOrEqual(before);
@@ -38,7 +40,7 @@ describe.each(keyTypeCases)('$type', ({ type, publicKeyLength, signatureLength, 
     test('a signature verifies under the public key without Vault', async () => {
       const { scope } = await openVault();
       const key = await scope.generate(type);
-      const signature = await scope.sign(key.id, message);
+      const signature = await scope.sign(key, message);
 
       expect(signature.type).toBe(type);
       expect(signature.bytes).toHaveLength(signatureLength);
@@ -55,7 +57,7 @@ describe.each(keyTypeCases)('$type', ({ type, publicKeyLength, signatureLength, 
       try {
         const again = reopened.scope(scope.name);
         expect(await again.list()).toEqual([key]);
-        const signature = await again.sign(key.id, message);
+        const signature = await again.sign(key, message);
         expect(await verify(key.publicKey, signature.bytes, message)).toBe(true);
       } finally {
         reopened.close();
@@ -74,18 +76,64 @@ describe.each(keyTypeCases)('$type', ({ type, publicKeyLength, signatureLength, 
       const { scope } = await openVault();
       const [a, b] = [await scope.generate(type), await scope.generate(type)];
 
-      await scope.delete(a.id);
-      await scope.delete(a.id);
+      await scope.delete(a);
+      await scope.delete(a);
 
       expect(await scope.list()).toEqual([b]);
-      await expectVaultError(scope.sign(a.id, message), 'not-found');
-      await expect(scope.sign(b.id, message)).resolves.toMatchObject({ type });
+      await expectVaultError(scope.sign(a, message), 'not-found');
+      await expect(scope.sign(b, message)).resolves.toMatchObject({ type });
+    });
+
+    test('sign and delete take the public information as returned, a structured clone included', async () => {
+      tickingClock();
+      const { scope } = await openVault();
+      const [a, b] = [await scope.generate(type), await scope.generate(type)];
+      const [listedA] = await scope.list();
+      if (!listedA) throw new Error('no key listed');
+
+      const signature = await scope.sign(structuredClone(listedA), message);
+      expect(await verify(a.publicKey, signature.bytes, message)).toBe(true);
+      await scope.delete(structuredClone(a));
+      expect(await scope.list()).toEqual([b]);
+    });
+
+    test('only the id, scope and type of the argument count: edited public key and creation time change nothing', async () => {
+      const { scope } = await openVault();
+      const [key, other] = [await scope.generate(type), await scope.generate(type)];
+      const edited = { ...key, publicKey: other.publicKey, createdAt: new Date(0) };
+
+      const signature = await scope.sign(edited, message);
+      expect(await verify(key.publicKey, signature.bytes, message)).toBe(true);
+      expect(await verify(other.publicKey, signature.bytes, message)).toBe(false);
+      await scope.delete(edited);
+      expect(await scope.list()).toEqual([other]);
+    });
+
+    test('an argument whose type differs from the stored key is a TypeError, and the key is not deleted', async () => {
+      const { scope } = await openVault();
+      const key = await scope.generate(type);
+      const retyped = { ...key, type: 'no-such-type' } as never;
+
+      await expect(scope.sign(retyped, message)).rejects.toThrow(TypeError);
+      await expect(scope.delete(retyped)).rejects.toThrow(TypeError);
+      expect(await scope.list()).toEqual([key]);
+    });
+
+    test('an argument that is not an object with a string id is a TypeError in sign and delete', async () => {
+      const { scope } = await openVault();
+      const key = await scope.generate(type);
+      const malformed = [undefined, null, key.id, 42, {}, { ...key, id: 1 }, { ...key, id: new String(key.id) }];
+      for (const arg of malformed) {
+        await expect(scope.sign(arg as never, message)).rejects.toThrow(TypeError);
+        await expect(scope.delete(arg as never)).rejects.toThrow(TypeError);
+      }
+      expect(await scope.list()).toEqual([key]);
     });
 
     test('signing with an unknown key id fails with not-found', async () => {
       const { scope } = await openVault();
       await scope.generate(type);
-      const error = await expectVaultError(scope.sign('no-such-key', message), 'not-found');
+      const error = await expectVaultError(scope.sign(keyRef(scope, 'no-such-key', type), message), 'not-found');
       expect(error.retryable).toBe(false);
     });
 
@@ -98,7 +146,7 @@ describe.each(keyTypeCases)('$type', ({ type, publicKeyLength, signatureLength, 
 
       expect(await readAll(name)).toEqual({ meta: [], keys: [] });
       expect(await scope.list()).toEqual([]);
-      await expectVaultError(scope.sign(old.id, message), 'not-found');
+      await expectVaultError(scope.sign(old, message), 'not-found');
 
       const fresh = await scope.generate(type);
       expect(await scope.list()).toEqual([fresh]);
@@ -134,13 +182,26 @@ describe.each(keyTypeCases)('$type', ({ type, publicKeyLength, signatureLength, 
       }
     });
 
-    test('a key of another scope is not-found by sign and untouched by delete', async () => {
+    test('a key passed to another scope is a TypeError in sign and delete: not signed with, not deleted', async () => {
+      const { vault } = await openVault();
+      const [a, b] = [vault.scope('app-a'), vault.scope('app-b')];
+      const key = await a.generate(type);
+      const sign = vi.spyOn(keyTypes[type], 'sign');
+
+      await expect(b.sign(key, message)).rejects.toThrow(TypeError);
+      await expect(b.delete(key)).rejects.toThrow(TypeError);
+      expect(sign).not.toHaveBeenCalled();
+      expect(await a.list()).toEqual([key]);
+    });
+
+    test('the id of a key of another scope is not-found by sign and untouched by delete', async () => {
       const { vault } = await openVault();
       const [a, b] = [vault.scope('app-a'), vault.scope('app-b')];
       const key = await a.generate(type);
 
-      await expectVaultError(b.sign(key.id, message), 'not-found');
-      await b.delete(key.id);
+      const elsewhere = { ...key, scope: b.name }; // the right scope for b, the id of a's key
+      await expectVaultError(b.sign(elsewhere, message), 'not-found');
+      await b.delete(elsewhere);
       expect(await a.list()).toEqual([key]);
     });
 
@@ -186,11 +247,11 @@ describe.each(keyTypeCases)('$type', ({ type, publicKeyLength, signatureLength, 
       const { vault } = await openVault();
       const [a, b] = [vault.scope('app-a'), vault.scope('app-b')];
       const key = await a.generate(type);
-      const pending = [a.list(), b.generate(type), a.sign(key.id, message)];
+      const pending = [a.list(), b.generate(type), a.sign(key, message)];
       vault.close();
 
       expect(() => vault.scope('app-c')).toThrow(expect.objectContaining({ name: 'InvalidStateError' }));
-      for (const call of [...pending, a.list(), b.list(), b.delete(key.id)]) {
+      for (const call of [...pending, a.list(), b.list(), a.delete(key)]) {
         await expect(call).rejects.toMatchObject({ name: 'InvalidStateError' });
       }
     });
@@ -213,13 +274,7 @@ describe.each(keyTypeCases)('$type', ({ type, publicKeyLength, signatureLength, 
       const { vault, scope } = await openVault();
       const key = await scope.generate(type);
       vault.close();
-      const calls = [
-        scope.generate(type),
-        scope.list(),
-        scope.sign(key.id, message),
-        scope.delete(key.id),
-        vault.wipe(),
-      ];
+      const calls = [scope.generate(type), scope.list(), scope.sign(key, message), scope.delete(key), vault.wipe()];
       for (const call of calls) await expect(call).rejects.toMatchObject({ name: 'InvalidStateError' });
     });
 
@@ -228,14 +283,14 @@ describe.each(keyTypeCases)('$type', ({ type, publicKeyLength, signatureLength, 
       const key = await scope.generate(type);
       // new Uint8Array('hello') is empty: coercing would sign the empty message and report success.
       for (const data of ['hello', [1, 2, 3], new ArrayBuffer(4), new DataView(new ArrayBuffer(4))]) {
-        await expect(scope.sign(key.id, data as never)).rejects.toThrow(new TypeError('data must be a Uint8Array'));
+        await expect(scope.sign(key, data as never)).rejects.toThrow(new TypeError('data must be a Uint8Array'));
       }
     });
 
     test('a call in flight when the vault is closed fails with InvalidStateError, not a retryable error', async () => {
       const { vault, scope } = await openVault();
       await scope.generate(type);
-      const pending = [scope.generate(type), scope.list(), scope.sign('any', message)];
+      const pending = [scope.generate(type), scope.list(), scope.sign(keyRef(scope, 'any', type), message)];
       vault.close();
       for (const call of pending) await expect(call).rejects.toMatchObject({ name: 'InvalidStateError' });
     });
@@ -290,7 +345,7 @@ describe.each(keyTypeCases)('$type', ({ type, publicKeyLength, signatureLength, 
 
       await expectVaultError(scope.list(), 'corrupted');
       await expectVaultError(scope.generate(type), 'corrupted');
-      await expectVaultError(scope.sign(key.id, message), 'corrupted');
+      await expectVaultError(scope.sign(key, message), 'corrupted');
       expect((await readAll(name)).meta).toEqual([]);
 
       await vault.wipe();
