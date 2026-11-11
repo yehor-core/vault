@@ -102,7 +102,7 @@ describe('format v1 regression', () => {
 
     expect((await scope.list()).map((k) => k.id)).toEqual([r.id]);
     const data = new TextEncoder().encode('signed by a v1 record');
-    const signature = await scope.sign(r.id, data);
+    const signature = await scope.sign({ id: r.id, scope: scope.name, type: 'ed25519' }, data);
     const publicKey = await crypto.subtle.importKey('raw', bytes(r.publicKey), 'Ed25519', false, ['verify']);
     expect(await crypto.subtle.verify('Ed25519', publicKey, signature.bytes, data)).toBe(true);
   });

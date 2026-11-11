@@ -231,16 +231,18 @@ interface Scope {
   readonly name: string;
   generate(type: KeyTypeName): Promise<KeyInfo>;      // never prompts
   list(): Promise<KeyInfo[]>;                          // this scope only, oldest first, never prompts
-  sign(id: string, data: Uint8Array): Promise<Signature>;
-  delete(id: string): Promise<void>;                   // missing key: no-op
+  sign<K extends KeyRef>(key: K, data: Uint8Array): Promise<Signature<K['type']>>;
+  delete(key: KeyRef): Promise<void>;                 // missing key: no-op
 }
 type KeyTypeName = 'ed25519';
-interface KeyInfo { id: string; type: KeyTypeName; publicKey: Uint8Array; createdAt: Date }
-type Signature = { type: 'ed25519'; bytes: Uint8Array };   // one member per key type, derived from the registry
+// One member per key type, derived from the registry:
+type KeyInfo = { id: string; scope: string; type: 'ed25519'; publicKey: Uint8Array; createdAt: Date };
+type KeyRef = Pick<KeyInfo, 'id' | 'scope' | 'type'>;    // what sign and delete read: a KeyInfo, or a clone of one
+type Signature<T extends KeyTypeName = KeyTypeName> = { type: 'ed25519'; bytes: Uint8Array };   // the member for T
 class VaultError extends Error { code: VaultErrorCode; retryable: boolean }
 ```
 
-How the types prevent misuse: every key operation is a method of a `Scope`, so a key operation without a scope can't be written. A `Scope` exposes its name and the four key operations, nothing vault-wide, and its name can't be reassigned: `vault › a Scope has no path to its Vault…`. `generate` accepts only registered key type names. `Signature` is a union discriminated by `type`, so a key type with a different signature shape (a passkey assertion) is another member, not a breaking change. There is no method that returns private key material.
+How the types prevent misuse: every key operation is a method of a `Scope`, so a key operation without a scope can't be written. A `Scope` exposes its name and the four key operations, nothing vault-wide, and its name can't be reassigned: `vault › a Scope has no path to its Vault…`. `generate` accepts only registered key type names. `sign` and `delete` take the key's public information as `generate` or `list` returned it, so an application never handles ids by hand, and `sign` returns the signature member of the key's type. Vault trusts nothing in that argument: it reads only the id, scope and type, and reads the key itself from storage, so an edited public key or creation time changes nothing: `vault › keys › only the id, scope and type of the argument count…`. Any object with these three fields works, a structured clone included: `vault › keys › sign and delete take the public information as returned…`. A key passed to a scope it doesn't belong to is a `TypeError`, and the key is neither signed with nor deleted: `vault › scopes › a key passed to another scope is a TypeError…`. `Signature` is a union discriminated by `type`, so a key type with a different signature shape (a passkey assertion) is another member, not a breaking change. There is no method that returns private key material.
 
 ### 7.2 Usage examples
 
@@ -249,21 +251,24 @@ import { Vault, VaultError } from 'vault';
 
 const vault = await Vault.open();
 const keys = vault.scope('https://app.example');       // a group of keys; no I/O
-const key = await keys.generate('ed25519');            // { id, type, publicKey, createdAt }
+const key = await keys.generate('ed25519');            // { id, scope, type, publicKey, createdAt }
 const list = await keys.list();                        // this scope's keys only
 
 const data = new TextEncoder().encode('hello');
-const signature = await keys.sign(key.id, data);
+const signature = await keys.sign(key, data);          // pass the KeyInfo itself; signature.type is 'ed25519'
 
 // Anyone with the public key verifies, without Vault:
 const publicKey = await crypto.subtle.importKey('raw', key.publicKey, 'Ed25519', false, ['verify']);
 await crypto.subtle.verify('Ed25519', publicKey, signature.bytes, data);   // true
 
-await keys.delete(key.id);
+// Kept only an id? Find its key first:
+const stored = (await keys.list()).find((k) => k.id === savedId);
+
+await keys.delete(key);
 await vault.wipe();                                    // every scope
 
 try {
-  await keys.sign(key.id, data);
+  await keys.sign(key, data);
 } catch (e) {
   if (e instanceof VaultError && e.code === 'not-found') { /* … */ }
 }
@@ -280,10 +285,10 @@ All failures are `VaultError` with a `code`; `retryable` is true only for `unava
 | Storage written by a newer format | `incompatible` | no | Reload with the newer build. `storage › a database written by a newer format…` |
 | Prompt declined or cancelled | Not built yet | | |
 | Vault locked | Not built yet | | |
-| Key not found, including a key of another scope | `not-found` | no | Refresh the key list. `vault › signing with an unknown key id fails with not-found`, `› a key of another scope is not-found by sign…` |
+| Key not found, including the id of a key of another scope | `not-found` (`delete`: no-op) | no | Refresh the key list. `vault › signing with an unknown key id fails with not-found`, `› the id of a key of another scope is not-found by sign…`, `› delete removes only that key, and deleting a missing key is a no-op` |
 | Passkey protection unsupported | Not built yet | | |
 
-Programming errors are not `VaultError`. Use after `close()`, including a call still in flight when it closed, throws a `DOMException` `InvalidStateError`, as IndexedDB does: `vault › a closed vault rejects every call`, `› a call in flight when the vault is closed…`. So does `scope()` after `close()`: `vault › scope() after close() throws InvalidStateError…`. A malformed scope name (empty, longer than 1024 code units, not a string, a lone surrogate) throws `TypeError`, so a bug can't create a scope that nothing can address: `vault › a malformed scope name is a TypeError…`. An unknown key type name passed from JavaScript throws `TypeError`: `vault › an unknown key type is a programming error…`. So does `sign` with `data` that is not a `Uint8Array`. Coercing it would be worse, because `new Uint8Array('hello')` is empty and would be signed as the empty message: `vault › sign rejects data that is not a Uint8Array…`. A non-string `id` passed from JavaScript is not checked: it fails as `unavailable`, which is misleading, but the call still fails, and TypeScript rules it out.
+Programming errors are not `VaultError`. Use after `close()`, including a call still in flight when it closed, throws a `DOMException` `InvalidStateError`, as IndexedDB does: `vault › a closed vault rejects every call`, `› a call in flight when the vault is closed…`. So does `scope()` after `close()`: `vault › scope() after close() throws InvalidStateError…`. A malformed scope name (empty, longer than 1024 code units, not a string, a lone surrogate) throws `TypeError`, so a bug can't create a scope that nothing can address: `vault › a malformed scope name is a TypeError…`. An unknown key type name passed from JavaScript throws `TypeError`: `vault › an unknown key type is a programming error…`. So does `sign` with `data` that is not a `Uint8Array`. Coercing it would be worse, because `new Uint8Array('hello')` is empty and would be signed as the empty message: `vault › sign rejects data that is not a Uint8Array…`. `sign` and `delete` throw `TypeError` for an argument that is not an object with a string id (an id string alone, the S1 call, included): `vault › keys › an argument that is not an object with a string id…`; for a key of another scope: `vault › scopes › a key passed to another scope is a TypeError…`; and for a type that differs from the stored key's (compared unparsed in `delete`, so a stored record whose type was tampered with is not deleted either; `wipe()` removes it): `vault › keys › an argument whose type differs from the stored key…`.
 
 ### 7.4 Prompts and user gestures
 
@@ -351,6 +356,7 @@ Scopes are what an embedding layer builds on: it chooses the scope from the send
 | Associated data | Every stored field of the key record, plus verifying each signature before returning it | Identity fields only, labels outside | Any edit fails closed; the verify catches a substituted key that decrypts cleanly | Labels and metadata are immutable after generate |
 | Versioning | Schema version = format version, and `v` in every record | Version in the header only | Re-encrypting migrations can't run in the upgrade callback; per-record versions let them run lazily | One field per record |
 | Concurrency | Crypto first, then one transaction that re-checks the header | Web Locks around read → crypto → write | IndexedDB alone gives atomicity and serialization; no lock is ever held across a passkey prompt | Crypto is wasted on a conflict |
+| `sign` and `delete` argument | The key's public information (`KeyInfo`, carrying its scope); Vault reads id, scope and type and re-reads the record | `sign(id, data)`, `delete(id)` | With opaque hashed ids, `sign(id)` can't tell a passkey key without reading IndexedDB first, which spends the user gesture (S5); the signature type follows the key type; a key used through the wrong scope is a loud error | A caller who kept only an id calls `list()` first |
 | `sign` result | Union discriminated by `type` | Bare `Uint8Array`; key handles with methods | Passkey assertions need more than signature bytes; handles go stale across tabs | Callers narrow on `type` |
 | Scopes | `vault.scope(name)` returns a `Scope` with the key operations; `Vault` keeps `open`, `scope`, `wipe`, `close`; all scopes share one connection and wrapping key pair | A `scope` option on every call, defaulting to `'default'` | A call that forgets its scope could be written, and would silently use the shared default; code handed a vault can always wipe it | Two classes instead of one |
 | | | One scope per `Vault.open()` | Each instance would need its own unlock once protection exists, or a hidden global shared between instances | — |
@@ -376,4 +382,5 @@ Scopes are what an embedding layer builds on: it chooses the scope from the send
 - **Concurrency mechanisms (§6) are implemented but not yet tested across tabs**, and other contexts are not notified of changes.
 - **Scopes group keys; they do not isolate same-origin code** (§2.3). Any same-origin code can open any scope.
 - **The scopes of a vault can't be listed, and one scope can't be cleared on its own**: `wipe()` is vault-wide, and a scope's keys go one `delete` at a time.
+- **`sign` and `delete` take a key's public information, not an id**: a caller who kept only an id calls `list()` first and passes the matching `KeyInfo`.
 - Only the ed25519 key type exists; there are no labels or metadata.

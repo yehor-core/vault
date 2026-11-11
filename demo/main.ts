@@ -51,7 +51,7 @@ function row(key: KeyInfo): HTMLTableRowElement {
   actions.append(
     button('Sign', () => sign(key)),
     ' ',
-    button('Delete', () => keys.delete(key.id)),
+    button('Delete', () => keys.delete(key)),
   );
   return tr;
 }
@@ -65,7 +65,7 @@ function button(label: string, action: () => Promise<void>): HTMLButtonElement {
 
 async function sign(key: KeyInfo) {
   const message = new TextEncoder().encode(messageInput.value);
-  const signature = await keys.sign(key.id, message);
+  const signature = await keys.sign(key, message);
   // Verification needs only the public key: no Vault involved.
   const publicKey = await crypto.subtle.importKey('raw', key.publicKey, 'Ed25519', false, ['verify']);
   const verified = await crypto.subtle.verify('Ed25519', publicKey, signature.bytes, message);
