@@ -35,3 +35,7 @@ _Avoid_: client, tenant, app
 **Embedding layer**:
 The part of the product, outside the vault library, that receives requests from other sites and chooses the scope from the sender's origin. It is what keeps consumers apart. Described, not built.
 _Avoid_: bridge, host, wrapper
+
+**Empty vault**:
+A vault that holds no keys and no protection. A vault never used, wiped, or evicted by the browser is empty, and the three can't be told apart.
+_Avoid_: new vault, wiped vault, evicted vault (as distinct states)
