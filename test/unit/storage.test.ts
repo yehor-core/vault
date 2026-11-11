@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { server } from 'vitest/browser';
 import { base64url, encode, type Bytes } from '../../src/bytes.ts';
 import { keyTypes, type KeyTypeName } from '../../src/key-types.ts';
 import { Vault, type VaultErrorCode } from '../../src/index.ts';
@@ -8,6 +7,7 @@ import { generateWrappingKey, importPublicKey, seal, unseal, type Cipher } from 
 import {
   cleanup,
   done,
+  ED25519_SMALL_ORDER_POINTS,
   expectVaultError,
   flipBit,
   keyRef,
@@ -157,17 +157,15 @@ describe('encryption at rest', () => {
 });
 
 describe('integrity', () => {
-  // ed25519's own points. WebKit 27.2 kills the page's process when Ed25519 verify gets such a key; documented as not protected.
-  test.skipIf(server.browser === 'webkit')(
-    'a planted key with a degenerate public key is listed like any added key, and sign fails closed',
-    async () => {
+  // ed25519's own behaviour. WebKit 27.2 kills the page's process when its Ed25519 verify gets such a key.
+  test.each(ED25519_SMALL_ORDER_POINTS)(
+    'a planted ed25519 key whose public key is a small-order point is corrupted at list and sign: %s',
+    async (_, hex) => {
       const { scope, name } = await openVault();
       await scope.generate('ed25519');
-      const identity = new Uint8Array(32);
-      identity[0] = 1; // the identity point
-      const id = await plantKey(name, scope.name, 'ed25519', identity);
+      const id = await plantKey(name, scope.name, 'ed25519', Uint8Array.fromHex(hex));
 
-      expect((await scope.list()).map((k) => k.id)).toContain(id);
+      await expectVaultError(scope.list(), 'corrupted');
       await expectVaultError(scope.sign(keyRef(scope, id, 'ed25519'), message), 'corrupted');
     },
   );

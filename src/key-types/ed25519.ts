@@ -1,16 +1,21 @@
+import { ed25519 as curve } from '@noble/curves/ed25519.js';
+import type { Bytes } from '../bytes.ts';
 import type { KeyType } from '../key-types.ts';
 
 // WebKit fails ~0.7% of generations, independently: all 5 attempts fail with p ≈ 0.007⁵ ≈ 2·10⁻¹¹ (3 would be
 // ≈ 3·10⁻⁷, once per ~3 million keys), and a persistent failure still surfaces quickly as 'unavailable'.
 const ATTEMPTS = 5;
 const PUBLIC_KEY_LENGTH = 32;
+// Strict RFC 8032 decoding, which also rejects small-order public keys. Explicit: noble's default is ZIP-215.
+const VERIFY_OPTIONS = { zip215: false } as const;
 
 /**
- * Ed25519 (RFC 8032) on WebCrypto. The public key is its 32-byte encoding; a signature is 64 bytes, over the
- * exact bytes passed to `sign`. The private key travels only as a CryptoKey, never as JS bytes.
+ * Ed25519 (RFC 8032), signed on WebCrypto and verified on @noble/curves. The public key is its 32-byte
+ * encoding; a signature is 64 bytes, over the exact bytes passed to `sign`. The private key travels only as
+ * a CryptoKey, never as JS bytes; verification handles only public data.
  */
 export const ed25519: KeyType = {
-  isPublicKey: (bytes) => bytes.length === PUBLIC_KEY_LENGTH,
+  isPublicKey,
 
   async generate() {
     const { publicKey, privateKey } = await generateKeyPair();
@@ -27,11 +32,24 @@ export const ed25519: KeyType = {
     return new Uint8Array(await crypto.subtle.sign('Ed25519', privateKey, data));
   },
 
+  // On the curve library, never crypto.subtle.verify: WebKit's crashes the tab on some public keys.
   async verify(publicKey, signature, data) {
-    const key = await crypto.subtle.importKey('raw', publicKey, 'Ed25519', false, ['verify']);
-    return crypto.subtle.verify('Ed25519', key, signature, data);
+    return curve.verify(signature, data, publicKey, VERIFY_OPTIONS);
   },
 };
+
+/**
+ * A canonical RFC 8032 point encoding (y < p, no x = 0 with the sign bit set) of a point outside the
+ * small-order subgroup: the same decoding strict verification applies.
+ */
+function isPublicKey(bytes: Bytes): boolean {
+  if (bytes.length !== PUBLIC_KEY_LENGTH) return false;
+  try {
+    return !curve.Point.fromBytes(bytes, VERIFY_OPTIONS.zip215).isSmallOrder();
+  } catch {
+    return false; // not a point encoding
+  }
+}
 
 // WebKit rejects about 0.7% of Ed25519 generations with OperationError (apparently keys with a leading
 // zero byte). Generation has no side effects, so a retry simply draws another key.
