@@ -63,6 +63,7 @@ async function plantKey(name: string, scope: string, publicKey: Bytes): Promise<
 describe('canonical encoding', () => {
   // Pins the storage format: every key id and AAD is built from these bytes, so they must never change.
   test('encodes the exact v1 bytes: tag, 4-byte big-endian length, data; integers as 8 bytes big-endian', () => {
+    // prettier-ignore
     expect(Array.from(encode('a', new Uint8Array([1, 2]), 258, 'é', Number.MAX_SAFE_INTEGER))).toEqual([
       ...[1, 0, 0, 0, 1, 0x61],
       ...[2, 0, 0, 0, 2, 1, 2],
@@ -127,6 +128,7 @@ describe('encryption at rest', () => {
   test('a value sealed by format v1 still opens: key derivation and cipher parameters are pinned', async () => {
     // Sealed once by the v1 code (in Node) to a test-only recipient key. A change that alters seal and unseal
     // alike (HKDF info, label, salt, IV handling) passes every round trip but fails here.
+    // prettier-ignore
     const v1 = {
       recipientPkcs8:
         '308187020100301306072a8648ce3d020106082a8648ce3d030107046d306b02010104201edb0959d969d7e98f5d46eb5de08192450b9ecbfa7dc0dd9a0c0b8d3f2cb87aa14403420004f2cd0725ba43ce6c4f05c83a9b8b5419cbf8bd34d15525dfb6d61580fd9e61ef90a50d9f1d15a81545bca1302da58bac232b8534b4913f15b40604d52b8af998',

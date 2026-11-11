@@ -81,7 +81,9 @@ export const replaceKey = (name: string, scope: string, id: string, record: obje
 
 export function flipBit<T extends Uint8Array>(bytes: T, index = bytes.length - 1): T {
   const copy = bytes.slice() as T;
-  copy[index]! ^= 1;
+  const byte = copy[index];
+  if (byte === undefined) throw new RangeError(`No byte at index ${index}`);
+  copy[index] = byte ^ 1;
   return copy;
 }
 
