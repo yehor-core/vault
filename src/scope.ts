@@ -123,6 +123,7 @@ export class Scope {
   /** The id and type of a `sign` or `delete` argument, which must name a key of this scope. */
   #readKeyRef(key: unknown): { id: string; type: unknown } {
     // Destructuring throws TypeError for undefined and null. Read once: a getter can't change between checks.
+    // `as`: each field is read as unknown and checked below.
     const { id, scope, type } = key as Record<string, unknown>;
     if (typeof id !== 'string') throw new TypeError('key.id must be a string');
     if (scope !== this.#name) throw new TypeError(`Key ${id} is not of scope ${this.#name}`);
@@ -240,7 +241,7 @@ function keyInfo(record: KeyRecord): KeyInfo {
  * transaction. Only compared; a record with no such type is deleted like any other.
  */
 function storedKeyType(value: unknown): KeyTypeName | undefined {
-  const type = typeof value === 'object' && value !== null ? (value as Record<string, unknown>).type : undefined;
+  const type = typeof value === 'object' && value !== null && 'type' in value ? value.type : undefined;
   return isKeyTypeName(type) ? type : undefined;
 }
 

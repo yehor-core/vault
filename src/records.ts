@@ -45,7 +45,7 @@ type Fields = Record<string, unknown>;
 
 function readObject(value: unknown, name: string): Fields {
   if (typeof value !== 'object' || value === null) throw corrupted(name);
-  return value as Fields;
+  return value as Fields; // `as`: a non-null object, checked above; its fields stay unknown
 }
 
 function readVersion(value: unknown, name: string): typeof FORMAT_VERSION {

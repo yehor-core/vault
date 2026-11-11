@@ -98,7 +98,7 @@ async function verify(key: KeyInfo, signature: Uint8Array<ArrayBuffer>, message:
 function selectedType(): KeyTypeName {
   const type = typeSelect.value;
   if (!keyTypeNames.includes(type)) throw new Error(`The demo offers no key type ${type}`);
-  return type as KeyTypeName; // checked against keyTypeNames above
+  return type as KeyTypeName; // `as`: checked against keyTypeNames above
 }
 
 const vault = await Vault.open().catch((error: unknown) => {

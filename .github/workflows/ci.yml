@@ -25,7 +25,9 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium firefox webkit
       - run: npm run lint
+      - run: npm run format:check # lint-staged formats only staged files; this catches drift elsewhere
       - run: npm run typecheck
       - run: npm run check:refs
+      - run: npm run check:casts
       - run: npm run check:decisions -- origin/${{ github.base_ref || 'main' }}
       - run: npm test
