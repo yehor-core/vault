@@ -69,6 +69,16 @@ describe('format v1 regression', () => {
     expect(keyAad(fields).toHex()).toBe(V1.keyAad);
   });
 
+  // D-18: a label follows the v1 fields as the tagged parts 'label', label. Derived by hand from the encoding,
+  // not by running the code: the v1 AAD above, then 01 00000005 'label', then 01 0000000c 'Paiements é' in UTF-8.
+  test('keyAad of a labelled record is the v1 associated data followed by the tagged label', () => {
+    // prettier-ignore
+    const fields = { v: 1, scope: 'default', id: 'fixed-id', type: 'ed25519', publicKey: fixedPublicKey, createdAt: 1762473600000, label: 'Paiements é' } as const;
+    // prettier-ignore
+    const expected = V1.keyAad + '01000000056c6162656c' + '010000000c506169656d656e747320c3a9';
+    expect(keyAad(fields).toHex()).toBe(expected);
+  });
+
   // S1 had one fixed scope, 'default'; its records live on in the ordinary scope of that name.
   test('a key record written by the v1 code still lists and signs', async () => {
     const { vault, name } = await openVault();
@@ -234,6 +244,11 @@ describe('strict parsing', () => {
     ['publicKey of 33 bytes', 'key.publicKey', (r) => ({ ...r, publicKey: Uint8Array.of(...r.publicKey, 0) })],
     ['createdAt as a string', 'key.createdAt', (r) => ({ ...r, createdAt: String(r.createdAt) })],
     ['createdAt negative', 'key.createdAt', (r) => ({ ...r, createdAt: -1 })],
+    ['label as a number', 'key.label', (r) => ({ ...r, label: 1 })],
+    ['label empty', 'key.label', (r) => ({ ...r, label: '' })],
+    ['label of 257 code units', 'key.label', (r) => ({ ...r, label: 'x'.repeat(257) })],
+    ['label with a lone surrogate', 'key.label', (r) => ({ ...r, label: '\uDC00' })],
+    ['label present but undefined', 'key.label', (r) => ({ ...r, label: undefined })],
     ['sealed missing', 'key.sealed', (r) => ({ ...r, sealed: undefined })],
     [
       'ephemeralPublicKey as a string',
@@ -271,9 +286,18 @@ describe('strict parsing', () => {
     await expectCorruptedMessage(() => parse(header, record), `${where}: unexpected field extra`);
   });
 
+  test('a malformed stored label fails list closed with corrupted, naming the field', async () => {
+    const { scope, name, record } = await storedRecords();
+    for (const label of [1, '', 'x'.repeat(257), '\uD800', undefined]) {
+      await replaceKey(name, scope.name, record.id, { ...record, label });
+      const error = await expectVaultError(scope.list(), 'corrupted');
+      expect(error.message).toBe('Corrupted storage: key.label');
+    }
+  });
+
   test('an extra field fails closed through the API too, for the header and for a key record', async () => {
     const { scope, name, header, record } = await storedRecords();
-    await replaceKey(name, scope.name, record.id, { ...record, label: 'not in format v1' });
+    await replaceKey(name, scope.name, record.id, { ...record, note: 'not in format v1' });
     await expectVaultError(scope.list(), 'corrupted');
 
     await replaceKey(name, scope.name, record.id, record);

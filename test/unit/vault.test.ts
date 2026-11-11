@@ -11,6 +11,7 @@ import {
   openVault,
   readAll,
   readHeader,
+  readKey,
   tickingClock,
   writeHeader,
 } from './helpers.ts';
@@ -97,14 +98,16 @@ describe.each(keyTypeCases)('$type', ({ type, publicKeyLength, signatureLength, 
       expect(await scope.list()).toEqual([b]);
     });
 
-    test('only the id, scope and type of the argument count: edited public key and creation time change nothing', async () => {
+    test('only the id, scope and type of the argument count: edited public key, creation time and label change nothing', async () => {
+      tickingClock();
       const { scope } = await openVault();
-      const [key, other] = [await scope.generate(type), await scope.generate(type)];
-      const edited = { ...key, publicKey: other.publicKey, createdAt: new Date(0) };
+      const [key, other] = [await scope.generate(type, { label: 'original' }), await scope.generate(type)];
+      const edited = { ...key, publicKey: other.publicKey, createdAt: new Date(0), label: 'edited' };
 
       const signature = await scope.sign(edited, message);
       expect(await verify(key.publicKey, signature.bytes, message)).toBe(true);
       expect(await verify(other.publicKey, signature.bytes, message)).toBe(false);
+      expect(await scope.list()).toEqual([key, other]); // the label is still the one given at generate
       await scope.delete(edited);
       expect(await scope.list()).toEqual([other]);
     });
@@ -151,6 +154,49 @@ describe.each(keyTypeCases)('$type', ({ type, publicKeyLength, signatureLength, 
       const fresh = await scope.generate(type);
       expect(await scope.list()).toEqual([fresh]);
       expect((await readHeader(name)).wrappingPublicKey).not.toEqual(oldHeader.wrappingPublicKey);
+    });
+  });
+
+  describe('labels', () => {
+    test('a label given at generate is stored and carried by the public information; without one there is no label field', async () => {
+      tickingClock();
+      const { scope, name } = await openVault();
+      const labelled = await scope.generate(type, { label: 'Payments' });
+      const unlabelled = await scope.generate(type);
+
+      expect(labelled.label).toBe('Payments');
+      expect(Object.hasOwn(unlabelled, 'label')).toBe(false);
+      expect(await scope.list()).toEqual([labelled, unlabelled]);
+      const [listedLabelled, listedUnlabelled] = await scope.list();
+      expect(listedLabelled?.label).toBe('Payments');
+      expect(Object.hasOwn(listedUnlabelled ?? {}, 'label')).toBe(false);
+      expect((await readKey(name, scope.name, labelled.id)).label).toBe('Payments');
+      expect(Object.hasOwn(await readKey(name, scope.name, unlabelled.id), 'label')).toBe(false);
+      const signature = await scope.sign(labelled, message);
+      expect(await verify(labelled.publicKey, signature.bytes, message)).toBe(true);
+    });
+
+    test('a malformed label or options argument is a TypeError, thrown before anything is generated or written', async () => {
+      const { scope, name } = await openVault();
+      const generate = vi.spyOn(keyTypes[type], 'generate');
+      const malformed = ['', 'x'.repeat(257), '\uD800', 'a\uDC00b', 1, null, {}, new String('label')];
+      for (const label of malformed) {
+        await expect(scope.generate(type, { label: label as never })).rejects.toThrow(TypeError);
+      }
+      // A string or number where the options belong would otherwise be read as "no label".
+      for (const options of ['Payments', 1, null]) {
+        await expect(scope.generate(type, options as never)).rejects.toThrow(TypeError);
+      }
+      expect(generate).not.toHaveBeenCalled();
+      expect(await readAll(name)).toEqual({ meta: [], keys: [] });
+    });
+
+    test('labels of 1 and 256 code units are kept exactly, and need not be unique', async () => {
+      tickingClock();
+      const { scope } = await openVault();
+      const labels = ['x', 'x'.repeat(256), 'é', 'é', '😀', 'same', 'same'];
+      for (const label of labels) await scope.generate(type, { label });
+      expect((await scope.list()).map((k) => k.label)).toEqual(labels);
     });
   });
 

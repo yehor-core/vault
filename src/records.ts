@@ -5,10 +5,15 @@ import { IV_LENGTH, type Sealed } from './seal.ts';
 
 /** Storage format version, and also the IndexedDB schema version: a newer format always bumps both. */
 export const FORMAT_VERSION = 1;
-const LABEL_KEY_ID = 'vault/v1/key-id';
-const LABEL_KEY_AAD = 'vault/v1/key';
+// Domain separators: the first part of every hashed or authenticated value, so no two uses can collide.
+const DOMAIN_KEY_ID = 'vault/v1/key-id';
+const DOMAIN_KEY_AAD = 'vault/v1/key';
+/** Tags a label in the AAD (D-18). */
+const AAD_LABEL_TAG = 'label';
 /** Long enough for any origin, so an embedding layer can name a scope after its sender. */
 export const MAX_SCOPE_NAME_LENGTH = 1024;
+/** In UTF-16 code units. */
+export const MAX_LABEL_LENGTH = 256;
 
 /** The single `meta/header` record: the wrapping key pair every private key is sealed to. */
 export interface HeaderRecord {
@@ -28,6 +33,8 @@ export interface KeyRecord {
   readonly publicKey: Bytes;
   /** Milliseconds since the epoch. */
   readonly createdAt: number;
+  /** Stored only when given: a record without one keeps its v1 AAD. */
+  readonly label?: string;
   readonly sealed: Sealed;
 }
 
@@ -35,7 +42,16 @@ export type KeyFields = Omit<KeyRecord, 'sealed'>;
 
 /** A well-formed string of 1 to MAX_SCOPE_NAME_LENGTH UTF-16 code units, compared exactly (no normalisation). */
 export function isScopeName(value: unknown): value is string {
-  return isString(value) && value.length >= 1 && value.length <= MAX_SCOPE_NAME_LENGTH && value.isWellFormed();
+  return isWellFormedString(value, MAX_SCOPE_NAME_LENGTH);
+}
+
+/** A well-formed string of 1 to MAX_LABEL_LENGTH UTF-16 code units. */
+export function isLabel(value: unknown): value is string {
+  return isWellFormedString(value, MAX_LABEL_LENGTH);
+}
+
+function isWellFormedString(value: unknown, maxLength: number): value is string {
+  return isString(value) && value.length >= 1 && value.length <= maxLength && value.isWellFormed();
 }
 
 // Field readers. Everything read from IndexedDB is untrusted: each reader checks one field, never coerces,
@@ -60,6 +76,11 @@ function readString(value: unknown, name: string): string {
 
 function readScopeName(value: unknown, name: string): string {
   if (!isScopeName(value)) throw corrupted(name);
+  return value;
+}
+
+function readLabel(value: unknown, name: string): string {
+  if (!isLabel(value)) throw corrupted(name);
   return value;
 }
 
@@ -131,7 +152,7 @@ function parseSealed(value: unknown): Sealed {
 function parseKeyShape(value: unknown): KeyRecord {
   const key = readObject(value, 'key');
   const v = readVersion(key.v, 'key.v');
-  assertOnlyFields(key, 'key', ['v', 'scope', 'id', 'type', 'publicKey', 'createdAt', 'sealed']);
+  assertOnlyFields(key, 'key', ['v', 'scope', 'id', 'type', 'publicKey', 'createdAt', 'label', 'sealed']);
   const type = readKeyType(key.type, 'key.type');
   return {
     v,
@@ -140,6 +161,8 @@ function parseKeyShape(value: unknown): KeyRecord {
     type,
     publicKey: readPublicKey(key.publicKey, 'key.publicKey', type),
     createdAt: readUint(key.createdAt, 'key.createdAt'),
+    // Present means a label: a stored `label: undefined` is malformed, not absent.
+    ...(Object.hasOwn(key, 'label') && { label: readLabel(key.label, 'key.label') }),
     sealed: parseSealed(key.sealed),
   };
 }
@@ -157,15 +180,19 @@ export async function parseKeyRecord(value: unknown): Promise<KeyRecord> {
 }
 
 export async function keyId(scope: string, type: KeyTypeName, publicKey: Bytes): Promise<string> {
-  const input = encode(LABEL_KEY_ID, scope, type, publicKey);
+  const input = encode(DOMAIN_KEY_ID, scope, type, publicKey);
   const digest = await crypto.subtle.digest('SHA-256', input);
   return base64url(new Uint8Array(digest));
 }
 
-/** AES-GCM associated data: every stored field except the ciphertext itself, so any edit fails decryption. */
+/**
+ * AES-GCM associated data: every stored field except the ciphertext itself, so any edit fails decryption.
+ * A label is appended after the v1 fields, tagged, so an unlabelled record keeps its v1 bytes (D-18).
+ */
 export function keyAad(fields: KeyFields): Bytes {
-  const { v, scope, id, type, publicKey, createdAt } = fields;
-  return encode(LABEL_KEY_AAD, v, scope, id, type, publicKey, createdAt);
+  const { v, scope, id, type, publicKey, createdAt, label } = fields;
+  const labelParts = label === undefined ? [] : [AAD_LABEL_TAG, label];
+  return encode(DOMAIN_KEY_AAD, v, scope, id, type, publicKey, createdAt, ...labelParts);
 }
 
 export function corrupted(what: string, cause?: unknown): VaultError {

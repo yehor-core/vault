@@ -15,6 +15,7 @@ const rows = element('keys', HTMLElement);
 const output = element('output', HTMLElement);
 const messageInput = element('message', HTMLInputElement);
 const typeSelect = element('type', HTMLSelectElement);
+const labelInput = element('label', HTMLInputElement);
 const keyTypeNames: readonly string[] = ['ed25519', 'secp256k1'] satisfies KeyTypeName[];
 
 const hex = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
@@ -46,11 +47,12 @@ function row(key: KeyInfo): HTMLTableRowElement {
   tr.dataset.publicKey = hex(key.publicKey);
   const cells = [
     key.id.slice(0, 12) + '…',
+    key.label ?? '',
     key.type,
     hex(key.publicKey).slice(0, 16) + '…',
     key.createdAt.toLocaleTimeString(),
   ];
-  for (const text of cells) tr.insertCell().textContent = text;
+  for (const text of cells) tr.insertCell().textContent = text; // text, never markup: a label is anyone's string
   const actions = tr.insertCell();
   actions.append(
     button('Sign', () => sign(key)),
@@ -107,7 +109,11 @@ const vault = await Vault.open().catch((error: unknown) => {
 });
 const keys = vault.scope(SCOPE);
 element('scope', HTMLElement).textContent = SCOPE;
-element('generate', HTMLElement).onclick = () => run(async () => void (await keys.generate(selectedType())));
+element('generate', HTMLElement).onclick = () =>
+  run(async () => {
+    const label = labelInput.value;
+    await keys.generate(selectedType(), label === '' ? {} : { label });
+  });
 element('wipe', HTMLElement).onclick = () =>
   run(async () => {
     await vault.wipe();

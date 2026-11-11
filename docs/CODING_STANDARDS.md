@@ -20,7 +20,7 @@ Checked by `/code-review` against every diff. Rules marked _(oxlint)_ or _(tsc)_
 ## Storage format
 
 - Every hashed or authenticated value goes through `encode` (`src/bytes.ts`); no ad-hoc concatenation.
-- Format constants (domain-separation labels, encoding tags, lengths, store names, the default database name) are each defined once, as a named constant.
+- Format constants (domain separators, encoding tags, lengths, store names, the default database name) are each defined once, as a named constant.
 - A new stored field of a key record is bound into its AAD, unless a decision in `docs/DECISIONS.md` says otherwise.
 - A change to the bytes of an existing record, id or AAD needs a format version bump. The v1 known-answer tests (`records › format v1 regression`, `storage › encodes the exact v1 bytes…`, `storage › a value sealed by format v1 still opens…`) catch it; never edit them to make a change pass. Each known-answer literal carries `// prettier-ignore`, so a formatter run or a Prettier config change can't rewrite it.
 
