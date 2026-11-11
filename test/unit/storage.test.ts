@@ -10,6 +10,7 @@ import {
   done,
   expectVaultError,
   flipBit,
+  keyRef,
   keyTypeCases,
   openVault,
   rawRun,
@@ -154,7 +155,7 @@ describe('integrity', () => {
       const id = await plantKey(name, scope.name, 'ed25519', identity);
 
       expect((await scope.list()).map((k) => k.id)).toContain(id);
-      await expectVaultError(scope.sign({ id, scope: scope.name, type: 'ed25519' }, message), 'corrupted');
+      await expectVaultError(scope.sign(keyRef(scope, id, 'ed25519'), message), 'corrupted');
     },
   );
 });
@@ -400,7 +401,7 @@ describe.each(keyTypeCases)('$type', ({ type, signatureLength, invalidPublicKeys
         const id = await plantKey(name, scope.name, type, bytes);
 
         await expect(scope.list(), label).rejects.toMatchObject({ code: 'corrupted' });
-        await expect(scope.sign({ id, scope: scope.name, type }, message), label).rejects.toMatchObject({
+        await expect(scope.sign(keyRef(scope, id, type), message), label).rejects.toMatchObject({
           code: 'corrupted',
         });
         await rawRun(name, ['keys'], (tx) => void tx.objectStore('keys').delete([scope.name, id]));
@@ -423,6 +424,15 @@ describe.each(keyTypeCases)('$type', ({ type, signatureLength, invalidPublicKeys
       expect((await to.list()).map((k) => k.id)).toEqual([id]);
       await expectVaultError(to.sign({ ...key, scope: to.name, id }, message), 'corrupted');
       expect(await from.list()).toEqual([]);
+    });
+
+    test('delete removes a record whose stored type was tampered with', async () => {
+      const { scope, name } = await openVault();
+      const key = await scope.generate(type);
+      await replaceKey(name, scope.name, key.id, { ...(await readKey(name, scope.name, key.id)), type: 'TAMPERED' });
+
+      await scope.delete(key);
+      expect((await readAll(name)).keys).toEqual([]);
     });
 
     test('ciphertexts swapped between two key records fail closed', async () => {

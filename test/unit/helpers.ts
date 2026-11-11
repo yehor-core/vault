@@ -1,5 +1,5 @@
 import { expect, vi } from 'vitest';
-import { Vault, VaultError, type KeyTypeName, type Scope, type VaultErrorCode } from '../../src/index.ts';
+import { Vault, VaultError, type KeyInfo, type KeyTypeName, type Scope, type VaultErrorCode } from '../../src/index.ts';
 
 /** What the tests know about one key type, independently of Vault's code. */
 export interface KeyTypeCase {
@@ -70,6 +70,11 @@ export async function openVault(): Promise<{ vault: Vault; scope: Scope; name: s
     await done(indexedDB.deleteDatabase(name));
   });
   return { vault, scope: vault.scope(TEST_SCOPE), name };
+}
+
+/** A KeyInfo naming key `id` of `scope`, for ids no call returned (planted or edited records); Vault reads only id, scope and type. */
+export function keyRef(scope: Scope, id: string, type: KeyTypeName): KeyInfo {
+  return { id, scope: scope.name, type, publicKey: new Uint8Array(), createdAt: new Date(0) };
 }
 
 export async function cleanup(): Promise<void> {

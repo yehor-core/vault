@@ -6,6 +6,7 @@ import {
   deleteHeader,
   done,
   expectVaultError,
+  keyRef,
   keyTypeCases,
   openVault,
   readAll,
@@ -132,10 +133,7 @@ describe.each(keyTypeCases)('$type', ({ type, publicKeyLength, signatureLength, 
     test('signing with an unknown key id fails with not-found', async () => {
       const { scope } = await openVault();
       await scope.generate(type);
-      const error = await expectVaultError(
-        scope.sign({ id: 'no-such-key', scope: scope.name, type }, message),
-        'not-found',
-      );
+      const error = await expectVaultError(scope.sign(keyRef(scope, 'no-such-key', type), message), 'not-found');
       expect(error.retryable).toBe(false);
     });
 
@@ -292,7 +290,7 @@ describe.each(keyTypeCases)('$type', ({ type, publicKeyLength, signatureLength, 
     test('a call in flight when the vault is closed fails with InvalidStateError, not a retryable error', async () => {
       const { vault, scope } = await openVault();
       await scope.generate(type);
-      const pending = [scope.generate(type), scope.list(), scope.sign({ id: 'any', scope: scope.name, type }, message)];
+      const pending = [scope.generate(type), scope.list(), scope.sign(keyRef(scope, 'any', type), message)];
       vault.close();
       for (const call of pending) await expect(call).rejects.toMatchObject({ name: 'InvalidStateError' });
     });

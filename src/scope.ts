@@ -39,9 +39,6 @@ export type KeyInfo = {
   };
 }[KeyTypeName];
 
-/** What `sign` and `delete` read from a KeyInfo; any object with these fields will do, a structured clone included. */
-export type KeyRef = Pick<KeyInfo, 'id' | 'scope' | 'type'>;
-
 /** One member per key type; the bytes are in that type's signature encoding (DESIGN.md §7.5). */
 export type Signature<T extends KeyTypeName = KeyTypeName> = {
   [U in T]: { readonly type: U; readonly bytes: Uint8Array<ArrayBuffer> };
@@ -95,16 +92,16 @@ export class Scope {
   }
 
   /**
-   * Signs `data` with `key`, as returned by `generate` or `list`. Only its id, scope and type are read; the
-   * key itself is read from storage. The signature verifies under the key's public key, without Vault.
+   * Signs `data` with `key`, as returned by `generate` or `list` (a structured clone will do). Only its id,
+   * scope and type are read; the key itself is read from storage. The signature verifies under its public key.
    */
-  async sign<K extends KeyRef>(key: K, data: Uint8Array): Promise<Signature<K['type']>> {
+  async sign<K extends KeyInfo>(key: K, data: Uint8Array): Promise<Signature<K['type']>> {
     const { id, type } = this.#readKeyRef(key);
     // Checked, not coerced: new Uint8Array('hello') is empty, so a string would be signed as the empty message.
     if (!(data instanceof Uint8Array)) throw new TypeError('data must be a Uint8Array');
     const message: Bytes = new Uint8Array(data); // the caller may change `data` while we await
     const { header, record } = await this.#loadKey(id);
-    if (record.type !== type) throw typeMismatch(id, type, record.type);
+    if (record.type !== type) throw typeMismatch(id, record.type);
     const signature = await signWithRecord(header, record, message);
     await assertSignatureMatches(record, signature, message);
     // `as`: the runtime check above makes record.type K['type'], which TypeScript can't follow.
@@ -112,15 +109,15 @@ export class Scope {
   }
 
   /** Deletes `key`, read like `sign` reads it. Deleting a missing key is a no-op. */
-  async delete(key: KeyRef): Promise<void> {
+  async delete(key: KeyInfo): Promise<void> {
     const { id, type } = this.#readKeyRef(key);
-    const storedType = await this.#connection.transact([KEYS_STORE], 'readwrite', async (tx) => {
-      const value = await getKeyRecord(tx, this.#name, id);
-      const stored = recordType(value);
-      if (value === undefined || stored === type) deleteKeyRecord(tx, this.#name, id);
-      return value === undefined ? type : stored;
+    const otherType = await this.#connection.transact([KEYS_STORE], 'readwrite', async (tx) => {
+      const stored = storedKeyType(await getKeyRecord(tx, this.#name, id));
+      if (stored !== undefined && stored !== type) return stored;
+      deleteKeyRecord(tx, this.#name, id);
+      return undefined;
     });
-    if (storedType !== type) throw typeMismatch(id, type, storedType);
+    if (otherType !== undefined) throw typeMismatch(id, otherType);
   }
 
   /** The id and type of a `sign` or `delete` argument, which must name a key of this scope. */
@@ -128,7 +125,7 @@ export class Scope {
     // Destructuring throws TypeError for undefined and null. Read once: a getter can't change between checks.
     const { id, scope, type } = key as Record<string, unknown>;
     if (typeof id !== 'string') throw new TypeError('key.id must be a string');
-    if (scope !== this.#name) throw new TypeError(`Key ${id} is of scope ${String(scope)}, not ${this.#name}`);
+    if (scope !== this.#name) throw new TypeError(`Key ${id} is not of scope ${this.#name}`);
     return { id, type };
   }
 
@@ -238,11 +235,15 @@ function keyInfo(record: KeyRecord): KeyInfo {
   return { id, scope, type, publicKey, createdAt: new Date(record.createdAt) };
 }
 
-/** The `type` field of a stored key record, unparsed: enough to compare, never to use. */
-function recordType(value: unknown): unknown {
-  return typeof value === 'object' && value !== null ? (value as Record<string, unknown>).type : undefined;
+/**
+ * The registered key type a stored record names, unparsed: parsing needs crypto, which would end the
+ * transaction. Only compared; a record with no such type is deleted like any other.
+ */
+function storedKeyType(value: unknown): KeyTypeName | undefined {
+  const type = typeof value === 'object' && value !== null ? (value as Record<string, unknown>).type : undefined;
+  return isKeyTypeName(type) ? type : undefined;
 }
 
-function typeMismatch(id: string, given: unknown, stored: unknown): TypeError {
-  return new TypeError(`Key ${id} is of type ${String(stored)}, not ${String(given)}`);
+function typeMismatch(id: string, stored: KeyTypeName): TypeError {
+  return new TypeError(`Key ${id} is of type ${stored}, not the type given`);
 }
