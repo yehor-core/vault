@@ -184,6 +184,9 @@ export async function rawRun<T>(
 export const readHeader = (name: string) => rawRun<any>(name, ['meta'], (tx) => tx.objectStore('meta').get('header'));
 export const writeHeader = (name: string, header: unknown) =>
   rawRun(name, ['meta'], (tx) => void tx.objectStore('meta').put(header, 'header'));
+/** Stores `value` in meta under `key`: a record next to the header, which Vault never writes. */
+export const writeMetaRecord = (name: string, key: IDBValidKey, value: unknown) =>
+  rawRun(name, ['meta'], (tx) => void tx.objectStore('meta').put(value, key));
 export const deleteHeader = (name: string) =>
   rawRun(name, ['meta'], (tx) => void tx.objectStore('meta').delete('header'));
 export const readKey = (name: string, scope: string, id: string) =>

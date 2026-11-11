@@ -23,7 +23,7 @@ export async function readHeader(tx: IDBTransaction): Promise<HeaderRecord | und
     request(meta.getAllKeys(null, 2)),
   ]);
   const foreign = keys.find((key) => key !== HEADER_KEY);
-  if (foreign !== undefined) throw corrupted(`meta: unexpected record ${String(foreign)}`);
+  if (foreign !== undefined) throw corrupted(`meta: unexpected record ${keyName(foreign)}`);
   if (present) return parseHeader(value);
   if (await request(tx.objectStore(KEYS_STORE).count())) throw corrupted('key records exist without a vault header');
   return undefined;
@@ -52,6 +52,18 @@ export function deleteKeyRecord(tx: IDBTransaction, scope: string, id: string): 
 export function clearAll(tx: IDBTransaction): void {
   tx.objectStore(META_STORE).clear();
   tx.objectStore(KEYS_STORE).clear();
+}
+
+/** An IndexedDB key as text that tells its kind: 7 and '7' differ, bytes read as hex. */
+function keyName(key: IDBValidKey): string {
+  if (typeof key === 'string') return JSON.stringify(key);
+  if (typeof key === 'number') return String(key);
+  if (key instanceof Date) return `Date ${key.toISOString()}`; // an invalid Date is no valid key
+  if (Array.isArray(key)) return `[${key.map(keyName).join(', ')}]`;
+  const bytes = ArrayBuffer.isView(key)
+    ? new Uint8Array(key.buffer, key.byteOffset, key.byteLength)
+    : new Uint8Array(key);
+  return `bytes ${bytes.toHex()}`;
 }
 
 // [] sorts after every string in IndexedDB key order, so [scope] .. [scope, []] covers exactly one scope.
