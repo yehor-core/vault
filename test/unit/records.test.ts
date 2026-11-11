@@ -62,14 +62,8 @@ describe('format v1 regression', () => {
   });
 
   test('keyAad of fixed fields is unchanged', () => {
-    const fields = {
-      v: 1,
-      scope: 'default',
-      id: 'fixed-id',
-      type: 'ed25519',
-      publicKey: fixedPublicKey,
-      createdAt: 1762473600000,
-    } as const;
+    // prettier-ignore
+    const fields = { v: 1, scope: 'default', id: 'fixed-id', type: 'ed25519', publicKey: fixedPublicKey, createdAt: 1762473600000 } as const;
     expect(keyAad(fields).toHex()).toBe(V1.keyAad);
   });
 

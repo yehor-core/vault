@@ -8,7 +8,7 @@ export const FORMAT_VERSION = 1;
 const LABEL_KEY_ID = 'vault/v1/key-id';
 const LABEL_KEY_AAD = 'vault/v1/key';
 /** Long enough for any origin, so an embedding layer can name a scope after its sender. */
-const MAX_SCOPE_NAME_LENGTH = 1024;
+export const MAX_SCOPE_NAME_LENGTH = 1024;
 
 /** The single `meta/header` record: the wrapping key pair every private key is sealed to. */
 export interface HeaderRecord {
@@ -33,7 +33,7 @@ export interface KeyRecord {
 
 export type KeyFields = Omit<KeyRecord, 'sealed'>;
 
-/** A well-formed string of 1 to 1024 UTF-16 code units, compared exactly (no normalisation). */
+/** A well-formed string of 1 to MAX_SCOPE_NAME_LENGTH UTF-16 code units, compared exactly (no normalisation). */
 export function isScopeName(value: unknown): value is string {
   return isString(value) && value.length >= 1 && value.length <= MAX_SCOPE_NAME_LENGTH && value.isWellFormed();
 }

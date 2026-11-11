@@ -79,7 +79,8 @@ const vault = await Vault.open().catch((error: unknown) => {
   throw error;
 });
 const keys = vault.scope(SCOPE);
-document.getElementById('scope')!.textContent = SCOPE;
+const scopeLabel = document.getElementById('scope');
+if (scopeLabel) scopeLabel.textContent = SCOPE;
 document.getElementById('generate')!.onclick = () => run(async () => void (await keys.generate('ed25519')));
 document.getElementById('wipe')!.onclick = () =>
   run(async () => {

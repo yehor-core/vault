@@ -1,5 +1,5 @@
 import { closedError, Connection } from './connection.ts';
-import { isScopeName } from './records.ts';
+import { isScopeName, MAX_SCOPE_NAME_LENGTH } from './records.ts';
 import { Scope } from './scope.ts';
 import { clearAll, KEYS_STORE, META_STORE } from './storage.ts';
 
@@ -24,10 +24,11 @@ export class Vault {
 
   /**
    * The scope `name`, empty until a key is generated in it. Synchronous: no I/O. `name` is a well-formed
-   * string of 1 to 1024 UTF-16 code units, compared exactly.
+   * string of 1 to MAX_SCOPE_NAME_LENGTH (1024) UTF-16 code units, compared exactly.
    */
   scope(name: string): Scope {
-    if (!isScopeName(name)) throw new TypeError('A scope name is a well-formed string of 1 to 1024 UTF-16 code units');
+    if (!isScopeName(name))
+      throw new TypeError(`A scope name is a well-formed string of 1 to ${MAX_SCOPE_NAME_LENGTH} UTF-16 code units`);
     if (this.#connection.closed) throw closedError();
     return new Scope(name, this.#connection);
   }
