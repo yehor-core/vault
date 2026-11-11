@@ -6,7 +6,7 @@ Checked by `/code-review` against every diff. Rules marked _(oxlint)_ or _(tsc)_
 
 - Minimal code; nothing speculative. The task rewards simplicity.
 - Comments explain only the non-obvious why, in one or two lines. No tutorials in code.
-- No `await` inside function arguments or array literals; name the intermediate value. _(lint)_
+- In `src/` and `demo/`, name an awaited value before passing it on: no `await` inside function arguments or array literals. Tests may write `expect(await …)`. _(lint)_
 - No non-null assertions (`!`). _(oxlint)_
 - No unused imports, locals or parameters. _(tsc)_
 - `as` only narrows a value already checked at runtime, or a generic type TypeScript can't follow. Never use it to skip a check.
