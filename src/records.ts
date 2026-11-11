@@ -1,6 +1,6 @@
 import { base64url, encode, isBytes, isString, isUint, type Bytes } from './bytes.ts';
 import { VaultError } from './errors.ts';
-import { isKeyTypeName, keyTypes, type KeyTypeName } from './key-types.ts';
+import { isKeyTypeName, isWellFormedKeyTypeName, keyTypes, type KeyTypeName } from './key-types.ts';
 import { IV_LENGTH, type Sealed } from './seal.ts';
 
 /** Storage format version, and also the IndexedDB schema version: a newer format always bumps both. */
@@ -101,9 +101,13 @@ function readPublicKey(value: unknown, name: string, type: KeyTypeName): Bytes {
   return bytes;
 }
 
+/** A well-formed name this build doesn't know was written by a newer build: incompatible, not corrupted (D-21). */
 function readKeyType(value: unknown, name: string): KeyTypeName {
-  if (!isKeyTypeName(value)) throw corrupted(name);
-  return value;
+  if (isKeyTypeName(value)) return value;
+  if (isWellFormedKeyTypeName(value)) {
+    throw new VaultError('incompatible', `Storage written by a newer build: ${name} ${value} is not known here`);
+  }
+  throw corrupted(name);
 }
 
 function readCryptoKey(value: unknown, name: string): CryptoKey {
@@ -152,8 +156,9 @@ function parseSealed(value: unknown): Sealed {
 function parseKeyShape(value: unknown): KeyRecord {
   const key = readObject(value, 'key');
   const v = readVersion(key.v, 'key.v');
-  assertOnlyFields(key, 'key', ['v', 'scope', 'id', 'type', 'publicKey', 'createdAt', 'label', 'sealed']);
+  // Before the rest: a newer key type may have fields of its own (D-21).
   const type = readKeyType(key.type, 'key.type');
+  assertOnlyFields(key, 'key', ['v', 'scope', 'id', 'type', 'publicKey', 'createdAt', 'label', 'sealed']);
   return {
     v,
     scope: readScopeName(key.scope, 'key.scope'),

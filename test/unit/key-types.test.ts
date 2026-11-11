@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 import { expect, test } from 'vitest';
-import { keyTypes } from '../../src/key-types.ts';
+import { isWellFormedKeyTypeName, keyTypes } from '../../src/key-types.ts';
 
 // The core is every source file except the registry and the key-type modules, which alone may name a type.
 const core = import.meta.glob<string>(['../../src/**/*.ts', '!../../src/key-types.ts', '!../../src/key-types/**'], {
@@ -19,4 +19,9 @@ test('no core file names a registered key type', () => {
       .map((type) => `${file} names ${type}`),
   );
   expect(named).toEqual([]);
+});
+
+// An older build reads a type it doesn't know as incompatible only if the name is well-formed (D-21).
+test('every registered key type name is well-formed, so an older build reads it as incompatible', () => {
+  expect(Object.keys(keyTypes).filter((type) => !isWellFormedKeyTypeName(type))).toEqual([]);
 });

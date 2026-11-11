@@ -29,6 +29,14 @@ export const keyTypes = { ed25519, secp256k1 } satisfies Record<string, KeyType>
 
 export type KeyTypeName = keyof typeof keyTypes;
 
+/**
+ * Lowercase letters, digits and hyphens, 1 to 32 characters: the names a key type may take, registered or not.
+ * A stored name of this form that this build doesn't know was written by a newer build (D-21).
+ */
+export function isWellFormedKeyTypeName(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-z0-9-]{1,32}$/.test(value);
+}
+
 export function isKeyTypeName(value: unknown): value is KeyTypeName {
   return typeof value === 'string' && Object.hasOwn(keyTypes, value);
 }

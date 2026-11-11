@@ -6,6 +6,7 @@ import {
   done,
   expectVaultError,
   keyRef,
+  keyTypeCases,
   openVault,
   rawRun,
   readHeader,
@@ -235,8 +236,12 @@ describe('strict parsing', () => {
     ['scope of 1025 code units', 'key.scope', (r) => ({ ...r, scope: 'x'.repeat(1025) })],
     ['scope with a lone surrogate', 'key.scope', (r) => ({ ...r, scope: '\uD800' })],
     ['id as a number', 'key.id', (r) => ({ ...r, id: 1 })],
-    ['unknown type', 'key.type', (r) => ({ ...r, type: 'p256' })],
-    ["type 'constructor' (inherited, not registered)", 'key.type', (r) => ({ ...r, type: 'constructor' })],
+    ['type empty', 'key.type', (r) => ({ ...r, type: '' })],
+    ['type with an uppercase letter', 'key.type', (r) => ({ ...r, type: 'P256' })],
+    ['type of 33 characters', 'key.type', (r) => ({ ...r, type: 'x'.repeat(33) })],
+    ['type with an underscore', 'key.type', (r) => ({ ...r, type: 'p_256' })],
+    ['type as a number', 'key.type', (r) => ({ ...r, type: 256 })],
+    ['type missing', 'key.type', (r) => ({ ...r, type: undefined })],
     ["type '__proto__'", 'key.type', (r) => ({ ...r, type: '__proto__' })],
     ["type 'toString'", 'key.type', (r) => ({ ...r, type: 'toString' })],
     ['publicKey as an Array', 'key.publicKey', (r) => ({ ...r, publicKey: Array.from(r.publicKey) })],
@@ -274,6 +279,22 @@ describe('strict parsing', () => {
     await expectCorruptedMessage(() => parseKeyRecord(edit(record)), what);
   });
 
+  // 'constructor' is inherited by the registry, not registered in it.
+  test.each(['p256', 'x'.repeat(32), 'bls12-381', '0', 'constructor'])(
+    'a well-formed key type this build does not know is incompatible, not retryable: %s',
+    async (type) => {
+      const { record } = await storedRecords();
+      await expectVaultError(parseKeyRecord({ ...record, type }), 'incompatible'); // checks retryable: false
+    },
+  );
+
+  test('an unknown key type is checked before the rest of the record: its own fields read as incompatible', async () => {
+    const { record } = await storedRecords();
+    const { publicKey, sealed, ...rest } = record;
+    const newer = { ...rest, type: 'p256', point: publicKey, wrapped: sealed, extra: 1 };
+    await expectVaultError(parseKeyRecord(newer), 'incompatible');
+  });
+
   const extraFieldCases: [where: string, parse: (header: any, record: any) => unknown][] = [
     ['header', (h) => parseHeader({ ...h, extra: 1 })],
     ['header.protection', (h) => parseHeader({ ...h, protection: { ...h.protection, extra: 1 } })],
@@ -294,6 +315,25 @@ describe('strict parsing', () => {
       expect(error.message).toBe('Corrupted storage: key.label');
     }
   });
+
+  test.each(keyTypeCases)(
+    'a key of an unknown type is incompatible at list and sign in its scope; other scopes and wipe still work: $type',
+    async ({ type }) => {
+      const { vault, scope, name } = await openVault();
+      const other = vault.scope('other');
+      const [key, otherKey] = [await scope.generate(type), await other.generate(type)];
+      const record = await readKey(name, scope.name, key.id);
+      await replaceKey(name, scope.name, key.id, { ...record, type: 'p256' });
+
+      await expectVaultError(scope.list(), 'incompatible');
+      await expectVaultError(scope.sign(key, new Uint8Array(1)), 'incompatible');
+      expect(await other.list()).toEqual([otherKey]);
+      expect((await other.sign(otherKey, new Uint8Array(1))).type).toBe(type);
+
+      await vault.wipe();
+      expect(await scope.list()).toEqual([]);
+    },
+  );
 
   test('an extra field fails closed through the API too, for the header and for a key record', async () => {
     const { scope, name, header, record } = await storedRecords();
