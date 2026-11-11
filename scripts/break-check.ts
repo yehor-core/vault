@@ -4,9 +4,10 @@
 //   npm run break-check -- --typecheck <source file> <text> <replacement> <test file>
 //   npm run break-check -- --batch <breaks.json>
 //
-// Without an engine, a vitest break runs in Chromium, Firefox and WebKit, and is red only if it went red in each:
+// Without an engine, a test break runs in Chromium, Firefox and WebKit, and is red only if it went red in each:
 // the README's Property → test rows claim every listed engine. Name one engine for a fast loop, or for a guard that
-// only one engine needs.
+// only one engine needs. A test file under test/e2e/ runs in Playwright (its projects carry the engine names),
+// any other in vitest.
 // --typecheck is for type-level tests: red means `npm run typecheck` failed with an error in <test file>.
 // --batch reads a JSON array of { file, text, replacement, test, pattern?, engine?, typecheck? } and runs each
 // break alone. The text must occur exactly once. The file is restored after every break, Ctrl-C included.
@@ -25,7 +26,7 @@ interface Break {
   readonly typecheck?: boolean;
 }
 
-// The browser instances in vitest.config.ts.
+// The browser instances in vitest.config.ts, and the projects in playwright.config.ts.
 const ENGINES = ['chromium', 'firefox', 'webkit'] as const;
 
 const USAGE = `usage: npm run break-check -- <source file> <text> <replacement> <test file> <test name pattern> [engine]
@@ -79,7 +80,7 @@ function breakOnce(spec: Break): boolean {
     original.replace(spec.text, () => spec.replacement),
   );
   try {
-    return spec.typecheck ? typecheckRed(spec) : vitestRed(spec);
+    return spec.typecheck ? typecheckRed(spec) : testRed(spec);
   } finally {
     restore();
     restore = () => {};
@@ -99,10 +100,11 @@ function typecheckRed(spec: Break): boolean {
   return false;
 }
 
-function vitestRed(spec: Break): boolean {
+function testRed(spec: Break): boolean {
   const engines = spec.engine === undefined ? ENGINES : [spec.engine];
+  const redIn = spec.test.startsWith('test/e2e/') ? playwrightRedIn : vitestRedIn;
   // Every engine runs, even after one stays green, so the output shows the whole picture.
-  return engines.map((engine) => vitestRedIn(spec, engine)).every(Boolean);
+  return engines.map((engine) => redIn(spec, engine)).every(Boolean);
 }
 
 function vitestRedIn(spec: Break, engine: string): boolean {
@@ -120,6 +122,22 @@ function vitestRedIn(spec: Break, engine: string): boolean {
     for (const line of output.split('\n').filter((l) => l.includes('×'))) console.log(`  ${line.trim()}`);
     return true;
   }
+  console.log(`NOT red in ${engine}: ${summary}`);
+  return false;
+}
+
+function playwrightRedIn(spec: Break, engine: string): boolean {
+  const args = ['playwright', 'test', spec.test, '-g', spec.pattern ?? '', '--project', engine];
+  const run = spawnSync('npx', args, { encoding: 'utf8' });
+  const lines = `${run.stdout}${run.stderr}`.split('\n');
+  // As with vitest: "No tests found" also exits non-zero, so only a failed count is red.
+  const failed = lines.find((line) => /^\s*\d+ failed/.test(line));
+  if (failed) {
+    console.log(`red in ${engine}: ${failed.trim()}`);
+    for (const line of lines.filter((l) => /^\s*✘/.test(l))) console.log(`  ${line.trim()}`);
+    return true;
+  }
+  const summary = lines.find((line) => /^\s*\d+ passed/.test(line))?.trim() ?? 'no test summary';
   console.log(`NOT red in ${engine}: ${summary}`);
   return false;
 }
