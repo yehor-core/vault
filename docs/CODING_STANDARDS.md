@@ -55,6 +55,7 @@ Checked by `/code-review` against every diff. Rules marked _(oxlint)_ or _(tsc)_
 - Name each test after the property it proves.
 - Tests run on real IndexedDB and WebCrypto in Chromium, Firefox and WebKit; no emulation. A spy may observe a call or inject a failure, never replace the behaviour the test proves.
 - A test skipped in an engine names the engine and the reason.
+- A guarantee of the public types (a return type that narrows, an argument TypeScript rejects) is tested with `expectTypeOf` or `// @ts-expect-error` in a unit test; `npm run typecheck` runs those assertions.
 
 ## Docs
 

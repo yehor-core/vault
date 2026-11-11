@@ -16,6 +16,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # check:decisions compares with the merge-base
       - uses: actions/setup-node@v7
         with:
           node-version: 26
@@ -25,4 +27,5 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run check:refs
+      - run: npm run check:decisions -- origin/${{ github.base_ref || 'main' }}
       - run: npm test
