@@ -32,7 +32,7 @@ Where a skill would write an ADR to `docs/adr/`, append an entry to `docs/DECISI
 - Start the entry with one short sentence that names the outcome and has no full stop inside it (so no file names): the list command above prints exactly that sentence.
 - If it answers an item under "## Decisions required by the task", put the ID next to that item.
 - If it constrains a later slice in `docs/ROADMAP.md`, end the entry with `[constrains S<N>]` and say how.
-- Never rewrite a past decision. Add a new entry and mark the old one "superseded by D-NN".
+- Never rewrite a past decision. Add a new entry and mark the old one at its end: `[Superseded by D-NN.]` or `[Updated by D-NN: …]`. `npm run check:decisions` enforces it. A detail of how a ticket implements a decision belongs in `DESIGN.md`, not in the decision.
 
 ## Use the glossary's vocabulary
 

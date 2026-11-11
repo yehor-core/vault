@@ -22,9 +22,10 @@ npx playwright install --with-deps chromium firefox webkit   # --with-deps insta
 | `npm run typecheck` | Type checks browser code (`tsconfig.json`, no Node globals) and Node-side config, scripts and e2e tests (`tsconfig.node.json`) |
 | `npm run lint` | oxlint: the coding-standards rules marked _(oxlint)_ (`.oxlintrc.json`) |
 | `npm run check:refs` | Checks that every test cited in `DESIGN.md` and `README.md` (`storage › …`) still exists |
+| `npm run check:decisions` | Checks that no past decision in `docs/DECISIONS.md` was rewritten since the merge-base with `origin/main`: it only gains notes naming a new decision |
 | `npm run test:unit` | Vitest Browser Mode in real Chromium, Firefox and WebKit (`test/unit`) |
 | `npm run test:e2e` | Playwright against the demo page in Chromium, Firefox and WebKit (`test/e2e`); starts its own server on :5174 |
-| `npm run test:scripts` | Node tests of the repo's own scripts (`scripts/*.test.ts`), e.g. that `check:refs` rejects a bad citation |
+| `npm run test:scripts` | Node tests of the repo's own scripts (`scripts/*.test.ts`), e.g. that `check:refs` rejects a bad citation and `check:decisions` a rewritten decision |
 | `npm test` | Script tests, then both suites |
 | `npx vitest run <file> -t '<name>' --project chromium` | One unit test in one engine (`chromium`, `firefox` or `webkit`): the fast TDD loop |
 | `npm run break-check -- <file> <text> <replacement> <test file> '<name>' [engine]` | Breaks the code once, runs the test, restores the code; exit 0 only if the test went red |
