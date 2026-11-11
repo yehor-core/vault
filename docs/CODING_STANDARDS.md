@@ -44,6 +44,7 @@ Checked by `/code-review` against every diff. Rules marked _(oxlint)_ or _(tsc)_
 
 - Runtime failures are `VaultError` with a `code`, and the original error in `cause`. Only `unavailable` is retryable.
 - Programming errors are `TypeError`, or `DOMException` `InvalidStateError` after `close()`; never `VaultError`.
+- A message states what the check observed (`Unknown key type: key.type is p256`), never a cause it can't see ("written by a newer build": a planted record reads the same). The likely cause and what the caller should do belong in the code's JSDoc in `src/errors.ts`.
 
 ## Public API
 

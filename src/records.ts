@@ -101,11 +101,11 @@ function readPublicKey(value: unknown, name: string, type: KeyTypeName): Bytes {
   return bytes;
 }
 
-/** A well-formed name this build doesn't know was written by a newer build: incompatible, not corrupted (D-21). */
+/** A well-formed name this build doesn't know is incompatible, not corrupted: most likely a newer build's type (D-21). */
 function readKeyType(value: unknown, name: string): KeyTypeName {
   if (isKeyTypeName(value)) return value;
   if (isWellFormedKeyTypeName(value)) {
-    throw new VaultError('incompatible', `Storage written by a newer build: ${name} ${value} is not known here`);
+    throw new VaultError('incompatible', `Unknown key type: ${name} is ${value}`);
   }
   throw corrupted(name);
 }
