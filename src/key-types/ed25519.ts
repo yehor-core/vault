@@ -32,7 +32,7 @@ export const ed25519: KeyType = {
     return new Uint8Array(await crypto.subtle.sign('Ed25519', privateKey, data));
   },
 
-  // On the curve library, never crypto.subtle.verify: WebKit's crashes the tab on some public keys (D-20).
+  // On the curve library, never crypto.subtle.verify: WebKit's crashes the tab on some public keys.
   async verify(publicKey, signature, data) {
     return curve.verify(signature, data, publicKey, VERIFY_OPTIONS);
   },

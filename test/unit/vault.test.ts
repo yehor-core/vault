@@ -451,10 +451,12 @@ describe('errors', () => {
     expect(error.retryable).toBe(true);
     expect(error.cause).toMatchObject({ name: 'OperationError' });
   });
+});
 
+describe('ed25519', () => {
   // ed25519's own behaviour: WebKit's crypto.subtle.verify crashes the tab on some public keys, so the
   // verification after signing never reaches it. Signing itself stays in WebCrypto.
-  test('signing with an ed25519 key verifies the signature without WebCrypto verify', async () => {
+  test('signing with an ed25519 key never calls WebCrypto verify', async () => {
     const { scope } = await openVault();
     const key = await scope.generate('ed25519');
     const [subtleVerify, subtleSign] = [vi.spyOn(crypto.subtle, 'verify'), vi.spyOn(crypto.subtle, 'sign')];

@@ -107,7 +107,7 @@ What Vault stores about a passkey key and what it can do without that record.
 | Key derivation | HKDF-SHA-256 over the ECDH output | WebCrypto | Native; done with `deriveKey`, so the shared secret never becomes JS bytes |
 | Point validation | SPKI import | WebCrypto | WebKit accepts off-curve points in `raw` and `jwk` import, but every engine rejects them in `spki`: `storage › an off-curve ephemeral public key is rejected…` |
 | ed25519 signing | Ed25519 (RFC 8032) | WebCrypto | Native in all three engines; the private key stays a CryptoKey |
-| ed25519 verification and public-key check | Ed25519, strict RFC 8032 decoding (`zip215: false`: canonical encodings only, small-order points rejected) | `@noble/curves` 2.3.0 | WebKit's `crypto.subtle.verify` crashes the tab on degenerate public keys (§8); verification handles only public data: `vault › signing with an ed25519 key verifies the signature without WebCrypto verify` |
+| ed25519 verification and public-key check | Ed25519, strict RFC 8032 decoding (`zip215: false`: canonical encodings only, small-order points rejected) | `@noble/curves` 2.3.0 | WebKit's `crypto.subtle.verify` crashes the tab on degenerate public keys (§8); verification handles only public data: `vault › ed25519 › signing with an ed25519 key never calls WebCrypto verify` |
 | secp256k1 keys and signatures | ECDSA over SHA-256, RFC 6979, low-S | `@noble/curves` 2.3.0 | No engine's WebCrypto has secp256k1 |
 | Key ids | SHA-256 | WebCrypto | Native |
 | Randomness | `getRandomValues` (also the secp256k1 seed), `generateKey` | WebCrypto | Native |
@@ -343,7 +343,7 @@ Storage and crypto facts this design depends on, measured in the engines Playwri
 | Transaction survives an await that settles in a later task (`crypto.subtle`) | yes | no | no | Crypto never runs inside a transaction |
 | Transaction survives a microtask await (a request's promise) | yes | yes | yes | Transaction bodies await request promises |
 | `generateKey('Ed25519')` always succeeds | ✓ | ✓ | ✗ (about 0.7% `OperationError`; no generated key has a leading zero byte) | Retried up to 5 times: `vault › a transient key generation failure is retried…`; a manual probe (not in the suite) ran 1000 generates in a row in every engine without failure |
-| Ed25519 `verify` with a degenerate public key (identity point, small y) returns `false` | ✓ | ✓ | ✗ (the page's process crashes) | Vault never calls `crypto.subtle.verify`: ed25519 verifies on `@noble/curves`, and `list()` rejects such keys first (§3.3): `vault › signing with an ed25519 key verifies the signature without WebCrypto verify`, `storage › a planted ed25519 key whose public key is a small-order point…` |
+| Ed25519 `verify` with a degenerate public key (identity point, small y) returns `false` | ✓ | ✓ | ✗ (the page's process crashes) | Vault never calls `crypto.subtle.verify`: ed25519 verifies on `@noble/curves` (§3.3), and `list()` rejects small-order and non-canonical keys before any verify; any other degenerate key reaches only noble's verify: `vault › ed25519 › signing with an ed25519 key never calls WebCrypto verify`, `storage › a planted ed25519 key whose public key is a small-order point…` |
 
 These WebKit facts come from Playwright's WebKit on Linux. Safari on macOS was not checked.
 

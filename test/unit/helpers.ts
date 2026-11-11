@@ -19,6 +19,19 @@ export interface KeyTypeCase {
   recordPrivateKeys(): () => Promise<Uint8Array[]>;
 }
 
+// The canonical encodings of the eight ed25519 points of small order (the 8-torsion subgroup), as listed in libsodium's small-order blocklist, crypto_core/ed25519/ref10/ed25519_ref10.c.
+// prettier-ignore
+export const ED25519_SMALL_ORDER_POINTS: [label: string, hex: string][] = [
+  ['the identity point (order 1)', '0100000000000000000000000000000000000000000000000000000000000000'],
+  ['order 2', 'ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f'],
+  ['order 4, x even', '0000000000000000000000000000000000000000000000000000000000000000'],
+  ['order 4, x odd', '0000000000000000000000000000000000000000000000000000000000000080'],
+  ['order 8, first, x even', 'c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a'],
+  ['order 8, first, x odd', 'c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa'],
+  ['order 8, second, x even', '26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05'],
+  ['order 8, second, x odd', '26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85'],
+];
+
 // The secp256k1 generator G (SEC 2 §2.4.1), the public key of the scalar 1.
 // prettier-ignore
 export const SECP256K1_G = Uint8Array.fromHex('0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798');

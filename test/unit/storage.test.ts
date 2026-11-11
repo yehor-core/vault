@@ -7,6 +7,7 @@ import { generateWrappingKey, importPublicKey, seal, unseal, type Cipher } from 
 import {
   cleanup,
   done,
+  ED25519_SMALL_ORDER_POINTS,
   expectVaultError,
   flipBit,
   keyRef,
@@ -156,22 +157,8 @@ describe('encryption at rest', () => {
 });
 
 describe('integrity', () => {
-  // ed25519's own points: the canonical encodings of the eight points of small order (the 8-torsion
-  // subgroup), as listed in libsodium's small-order blocklist, crypto_core/ed25519/ref10/ed25519_ref10.c.
-  // WebKit 27.2 kills the page's process when its Ed25519 verify gets one; Vault must never hand it one.
-  // prettier-ignore
-  const smallOrderPoints: [label: string, hex: string][] = [
-    ['the identity point (order 1)', '0100000000000000000000000000000000000000000000000000000000000000'],
-    ['order 2', 'ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f'],
-    ['order 4, x even', '0000000000000000000000000000000000000000000000000000000000000000'],
-    ['order 4, x odd', '0000000000000000000000000000000000000000000000000000000000000080'],
-    ['order 8, first, x even', 'c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a'],
-    ['order 8, first, x odd', 'c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa'],
-    ['order 8, second, x even', '26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05'],
-    ['order 8, second, x odd', '26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85'],
-  ];
-
-  test.each(smallOrderPoints)(
+  // ed25519's own behaviour. WebKit 27.2 kills the page's process when its Ed25519 verify gets such a key.
+  test.each(ED25519_SMALL_ORDER_POINTS)(
     'a planted ed25519 key whose public key is a small-order point is corrupted at list and sign: %s',
     async (_, hex) => {
       const { scope, name } = await openVault();
