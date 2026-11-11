@@ -22,6 +22,7 @@
     "format:check": "prettier --check .",
     "check:casts": "node scripts/check-casts.ts",
     "break-check": "node scripts/break-check.ts",
+    "console-snippets": "node scripts/run-console-snippets.ts",
     "test": "npm run test:scripts && npm run test:unit && npm run test:e2e",
     "test:scripts": "node --test scripts/*.test.ts",
     "test:unit": "vitest run",

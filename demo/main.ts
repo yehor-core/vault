@@ -1,8 +1,12 @@
+/// <reference types="vite/client" />
 import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { Vault, VaultError, type KeyInfo, type KeyTypeName } from '../src/index.ts';
 
 // One fixed scope: whether the demo shows scopes is decided later.
 const SCOPE = 'demo';
+
+// For experiments by hand in DevTools: Vite serves src/ only under /@fs/, so the console can't import it.
+if (import.meta.env.DEV) Object.assign(globalThis, { Vault });
 
 function element<T extends HTMLElement>(id: string, type: new () => T): T {
   const found = document.getElementById(id);

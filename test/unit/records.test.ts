@@ -284,7 +284,8 @@ describe('strict parsing', () => {
     'a well-formed key type this build does not know is incompatible, not retryable: %s',
     async (type) => {
       const { record } = await storedRecords();
-      await expectVaultError(parseKeyRecord({ ...record, type }), 'incompatible'); // checks retryable: false
+      const error = await expectVaultError(parseKeyRecord({ ...record, type }), 'incompatible'); // checks retryable: false
+      expect(error.message).toBe(`Unknown key type: key.type is ${type}`);
     },
   );
 

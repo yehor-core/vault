@@ -140,3 +140,21 @@ test('demo generates a labelled key and lists its label as text, never as markup
   await page.click('#wipe');
   await expect(rows).toHaveCount(0);
 });
+
+// The wrap-up's console experiments (.claude/skills/wrap-up/console-prelude.md) start from this global.
+test('the dev demo exposes Vault to the console: a key generated there is listed by the demo', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#status')).toHaveText('Ready');
+  await page.evaluate(async () => {
+    // `as`: the global the dev demo sets; undefined fails the call below
+    const { Vault } = globalThis as unknown as { Vault: typeof import('../../src/index.ts').Vault };
+    const vault = await Vault.open();
+    await vault.scope('demo').generate('ed25519', { label: 'from the console' });
+    vault.close();
+  });
+  await page.reload();
+  await expect(page.locator('#status')).toHaveText('Ready');
+  await expect(page.getByRole('cell', { name: 'from the console', exact: true })).toHaveCount(1);
+  await page.click('#wipe');
+  await expect(page.locator('#keys tr')).toHaveCount(0);
+});

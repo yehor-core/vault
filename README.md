@@ -31,6 +31,7 @@ npx playwright install --with-deps chromium firefox webkit   # --with-deps insta
 | `npm test` | Script tests, then both suites |
 | `npx vitest run <file> -t '<name>' --project chromium` | One unit test in one engine (`chromium`, `firefox` or `webkit`): the fast TDD loop |
 | `npm run break-check -- <file> <text> <replacement> <test file> '<name>' [engine]` | Breaks the code once, runs the test, restores the code; exit 0 only if the test went red. Without `engine`, the test runs in Chromium, Firefox and WebKit and must go red in each; name one engine for a fast loop. A test file under `test/e2e/` runs in Playwright, any other in vitest. `--typecheck <file> <text> <replacement> <test file>`: red when `npm run typecheck` fails in that test file. `--batch <breaks.json>`: a JSON array of `{ file, text, replacement, test, pattern?, engine?, typecheck? }`, each run alone |
+| `npm run console-snippets -- <report.md> [engine]` | Runs the report's ```` ```js ```` blocks in the dev demo, in one scope as if pasted into DevTools in order, and prints their console output per engine (default: all three); exit 0 only if none threw. The demo sets `Vault` as a console global in dev |
 
 ```ts
 import { Vault } from 'vault';
@@ -120,6 +121,7 @@ Test references: `<name> ›` cites `test/unit/<name>.test.ts`, `e2e ›` cites 
 | A malformed stored label (wrong type, empty, too long, a lone surrogate, present but `undefined`) is `corrupted` at `list()`, naming `key.label` | `records › strict parsing › a malformed stored label fails list closed with corrupted, naming the field`, `› a malformed key record field is corrupted and named: label …` | Chromium, Firefox, WebKit |
 | The AAD of a labelled record is pinned: the v1 AAD followed by the tagged label | `records › format v1 regression › keyAad of a labelled record is the v1 associated data followed by the tagged label` | Chromium, Firefox, WebKit |
 | The demo renders labels as text, never as markup | `e2e › demo generates a labelled key and lists its label as text, never as markup` | Chromium, Firefox, WebKit |
+| The dev demo exposes `Vault` to the console, on the demo's own database, for experiments by hand | `e2e › the dev demo exposes Vault to the console: a key generated there is listed by the demo` | Chromium, Firefox, WebKit |
 | An argument whose type differs from the stored key is a `TypeError`, and the key is not deleted | `vault › keys › an argument whose type differs from the stored key is a TypeError, and the key is not deleted` | Chromium, Firefox, WebKit |
 | `delete` removes a record whose stored type was tampered with, as before (only a different registered type is a `TypeError`) | `storage › integrity › delete removes a record whose stored type was tampered with` | Chromium, Firefox, WebKit |
 | An argument that is not an object with a string id (an id string alone included) is a `TypeError` | `vault › keys › an argument that is not an object with a string id is a TypeError in sign and delete` | Chromium, Firefox, WebKit |

@@ -10,5 +10,5 @@ Close slice S<N> once its last ticket is merged. The user names the slice; other
 2. Create `S<N>/wrap-up` from an up-to-date `main`, and set the slice's `Status: done` in `docs/ROADMAP.md`.
 3. Write the slice report from the slice's merged PRs and the `DESIGN.md` and README "Property → test" rows they changed:
    - **Guarantees**: each thing the slice guarantees → the test or code that enforces it. **Not guaranteed**: said plainly. Done when every claim has a reference.
-   - **Break it**: 2–3 experiments to run by hand. For each: exact steps with a copy-paste console snippet (DevTools can't edit IndexedDB values), the expected result including the error code, and whether an automated test covers it; if none does, why it can't be automated.
+   - **Break it**: 2–3 experiments to run by hand. Start from the block in [console-prelude.md](console-prelude.md). For each: exact steps with a copy-paste `js` code block, the expected result including the error code, and whether an automated test covers it; if none does, why it can't be automated. Done when `npm run console-snippets -- <report.md>` exits 0 and its output matches every expected result in all three engines.
 4. Commit, push the branch, and open the PR: title `S<N>: wrap-up`, body the report. Post the link in chat.
