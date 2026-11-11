@@ -40,6 +40,13 @@ const keyTypeCaseByName: { [T in KeyTypeName]: KeyTypeCase & { readonly type: T 
       { label: '31 bytes', bytes: crypto.getRandomValues(new Uint8Array(31)) },
       { label: '33 bytes', bytes: crypto.getRandomValues(new Uint8Array(33)) },
       { label: 'empty', bytes: new Uint8Array() },
+      // Non-canonical encodings, which RFC 8032 §5.1.3 rejects and ZIP-215 accepts (little-endian y, sign bit on top).
+      // prettier-ignore
+      { label: 'y = p + 3, a non-canonical encoding of the point with y = 3', bytes: Uint8Array.fromHex('f0ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f') },
+      // prettier-ignore
+      { label: 'x = 0 with the sign bit set', bytes: Uint8Array.fromHex('0100000000000000000000000000000000000000000000000000000000000080') },
+      // prettier-ignore
+      { label: 'a y with no x', bytes: Uint8Array.fromHex('0200000000000000000000000000000000000000000000000000000000000000') }, // (y² − 1)/(dy² + 1) is no square mod p
     ],
     recordPrivateKeys() {
       // Vault seals an ed25519 key with wrapKey; the test may export it, Vault never does.

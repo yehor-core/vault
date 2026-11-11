@@ -50,15 +50,15 @@ const k1 = await keys.generate('secp256k1');      // ECDSA over SHA-256, low-S, 
 | Firefox | 157 | ✓ | ✓ | not built yet |
 | WebKit | 27.2 | ✓ | ✓ | not built yet |
 
-Needs WebCrypto Ed25519, ECDH P-256, HKDF and AES-GCM, IndexedDB and `Uint8Array.prototype.toBase64` (ES2026), in a secure context. secp256k1 runs on `@noble/curves` 2.3.0, pinned exactly (DESIGN.md §3.3). WebKit (Playwright, Linux) has four quirks that shape the design; see DESIGN.md §8:
+Needs WebCrypto Ed25519, ECDH P-256, HKDF and AES-GCM, IndexedDB and `Uint8Array.prototype.toBase64` (ES2026), in a secure context. secp256k1, and ed25519 verification, run on `@noble/curves` 2.3.0, pinned exactly (DESIGN.md §3.3). WebKit (Playwright, Linux) has four quirks that shape the design; see DESIGN.md §8:
 - It loses stored X25519 keys.
 - Its point import accepts off-curve points.
 - Its Ed25519 key generation fails about 0.7% of the time (Vault retries it).
-- Its Ed25519 verify crashes the tab on degenerate public keys. That one is not protected: only a planted key can trigger it.
+- Its Ed25519 verify crashes the tab on degenerate public keys, so Vault verifies ed25519 on `@noble/curves` and never calls it.
 
 ## Property → test
 
-Test references: `<name> ›` cites `test/unit/<name>.test.ts`, `e2e ›` cites `test/e2e/`; a middle segment names the `describe` group. `npm run check:refs` checks that every cited test exists. Every unit test runs in all three engines, except one test skipped in WebKit, as noted in its row. Every test about keys runs once per registered key type. Each row was break-checked: the guarding code was broken once and the test went red in every listed engine. Where two guards protect one property, both were broken together. The type row was broken in `src/scope.ts` and went red in `npm run typecheck`. Exception: breaking the SPKI guard turns its test red only in WebKit, the only engine whose `raw` import accepts off-curve points. Not break-checked: the two platform rows, "Keys persist" and "Opening and listing write nothing", which are functional checks.
+Test references: `<name> ›` cites `test/unit/<name>.test.ts`, `e2e ›` cites `test/e2e/`; a middle segment names the `describe` group. `npm run check:refs` checks that every cited test exists. Every unit test runs in all three engines. Every test about keys runs once per registered key type. Each row was break-checked: the guarding code was broken once and the test went red in every listed engine. Where two guards protect one property, both were broken together. The type row was broken in `src/scope.ts` and went red in `npm run typecheck`. Exception: breaking the SPKI guard turns its test red only in WebKit, the only engine whose `raw` import accepts off-curve points. Not break-checked: the two platform rows, "Keys persist" and "Opening and listing write nothing", which are functional checks.
 
 | Property | Test | Engines |
 |---|---|---|
@@ -78,8 +78,9 @@ Test references: `<name> ›` cites `test/unit/<name>.test.ts`, `e2e ›` cites 
 | The encoding's exact v1 bytes are pinned (tags 1/2/3, 4-byte big-endian length, 8-byte big-endian integers), so a refactor can't silently change every stored id and AAD | `storage › canonical encoding › encodes the exact v1 bytes…` | Chromium, Firefox, WebKit |
 | Key ids are base64url without padding: their stored text form can't change silently | `storage › canonical encoding › key ids are base64url without padding (RFC 4648 §5)` | Chromium, Firefox, WebKit |
 | A negative `createdAt` fails closed at `list()` | `storage › integrity › a negative createdAt is rejected at list…` | Chromium, Firefox, WebKit |
-| A planted key whose public key is not valid for its type (ed25519: not 32 bytes; secp256k1: wrong length, uncompressed form, prefix 0x04, an x with no point) fails closed at `list()` | `storage › integrity › a planted key whose public key is not valid for its type is rejected at list` | Chromium, Firefox, WebKit |
-| A planted key with a degenerate public key fails closed at `sign()` | `storage › integrity › a planted key with a degenerate public key is listed like any added key, and sign fails closed` | Chromium, Firefox (skipped in WebKit, where verify crashes the tab: not protected) |
+| A planted key whose public key is not valid for its type (ed25519: not 32 bytes, or not a canonical RFC 8032 encoding: y ≥ p, x = 0 with the sign bit set, a y with no x; secp256k1: wrong length, uncompressed form, prefix 0x04, an x with no point) fails closed at `list()` | `storage › integrity › a planted key whose public key is not valid for its type is rejected at list` | Chromium, Firefox, WebKit |
+| A planted ed25519 key whose public key is the identity or another small-order point fails closed at `list()` and `sign()`, also in WebKit, whose own verify would crash the tab | `storage › integrity › a planted ed25519 key whose public key is a small-order point is corrupted at list and sign: <case>` | Chromium, Firefox, WebKit |
+| Verifying an ed25519 signature never calls WebCrypto's `verify`; signing stays in WebCrypto | `vault › signing with an ed25519 key verifies the signature without WebCrypto verify` | Chromium, Firefox, WebKit |
 | Ciphertexts swapped between records fail closed | `storage › integrity › ciphertexts swapped between two key records fail closed` | Chromium, Firefox, WebKit |
 | A key an attacker sealed to the public wrapping key is rejected, not used | `storage › integrity › a key an attacker sealed to the public wrapping key decrypts, but is rejected instead of used` | Chromium, Firefox, WebKit |
 | A record moved to another scope fails closed: at `list()` if its id is kept, at `sign()` if its id is recomputed for the new scope | `storage › integrity › a key record moved to another scope fails closed: at list if its id is kept, at sign if it is recomputed` | Chromium, Firefox, WebKit |

@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { server } from 'vitest/browser';
 import { base64url, encode, type Bytes } from '../../src/bytes.ts';
 import { keyTypes, type KeyTypeName } from '../../src/key-types.ts';
 import { Vault, type VaultErrorCode } from '../../src/index.ts';
@@ -157,17 +156,29 @@ describe('encryption at rest', () => {
 });
 
 describe('integrity', () => {
-  // ed25519's own points. WebKit 27.2 kills the page's process when Ed25519 verify gets such a key; documented as not protected.
-  test.skipIf(server.browser === 'webkit')(
-    'a planted key with a degenerate public key is listed like any added key, and sign fails closed',
-    async () => {
+  // ed25519's own points: the canonical encodings of the eight points of small order (the 8-torsion
+  // subgroup), as listed in libsodium's small-order blocklist, crypto_core/ed25519/ref10/ed25519_ref10.c.
+  // WebKit 27.2 kills the page's process when its Ed25519 verify gets one; Vault must never hand it one.
+  // prettier-ignore
+  const smallOrderPoints: [label: string, hex: string][] = [
+    ['the identity point (order 1)', '0100000000000000000000000000000000000000000000000000000000000000'],
+    ['order 2', 'ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f'],
+    ['order 4, x even', '0000000000000000000000000000000000000000000000000000000000000000'],
+    ['order 4, x odd', '0000000000000000000000000000000000000000000000000000000000000080'],
+    ['order 8, first, x even', 'c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a'],
+    ['order 8, first, x odd', 'c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa'],
+    ['order 8, second, x even', '26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05'],
+    ['order 8, second, x odd', '26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85'],
+  ];
+
+  test.each(smallOrderPoints)(
+    'a planted ed25519 key whose public key is a small-order point is corrupted at list and sign: %s',
+    async (_, hex) => {
       const { scope, name } = await openVault();
       await scope.generate('ed25519');
-      const identity = new Uint8Array(32);
-      identity[0] = 1; // the identity point
-      const id = await plantKey(name, scope.name, 'ed25519', identity);
+      const id = await plantKey(name, scope.name, 'ed25519', Uint8Array.fromHex(hex));
 
-      expect((await scope.list()).map((k) => k.id)).toContain(id);
+      await expectVaultError(scope.list(), 'corrupted');
       await expectVaultError(scope.sign(keyRef(scope, id, 'ed25519'), message), 'corrupted');
     },
   );
