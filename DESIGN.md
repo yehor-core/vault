@@ -67,7 +67,7 @@ Trusted: the browser, its WebCrypto and IndexedDB implementations, the OS, and o
 - A compromised browser or OS, and malicious browser extensions: they see everything the page sees.
 - Preventing XSS. Vault limits what injected code gets (§2.3); it doesn't stop the injection.
 - Physical and side-channel attacks on the machine or the authenticator.
-- Timing side channels in JS. WebCrypto does the secret-dependent work.
+- Timing side channels in JS. WebCrypto does the secret-dependent work, except for secp256k1, where `@noble/curves` and Vault's scalar check run in JS, which promises no constant time.
 
 ## 3. Key protection
 
@@ -111,7 +111,7 @@ What Vault stores about a passkey key and what it can do without that record.
 | Key ids | SHA-256 | WebCrypto | Native |
 | Randomness | `getRandomValues` (also the secp256k1 seed), `generateKey` | WebCrypto | Native |
 
-**The one third-party cryptographic dependency is `@noble/curves`, for secp256k1 only.** No engine's WebCrypto has the curve, and Vault does no hand-rolled crypto. It is pinned exactly to 2.3.0, its independently audited release (Trail of Bits, August 2026, full scope); the newer 2.4.0 has only AI-assisted self-audits, and its hardening concerns misuse that Vault's calls don't make. Its one dependency, `@noble/hashes`, arrives through its exact pin as 2.3.0. `package-lock.json` carries the integrity hash of both, and `npm audit signatures` verifies their registry signatures. Every option of every call is passed explicitly (`src/key-types/secp256k1.ts`), so a changed library default can't change what a `secp256k1` signature is.
+**The one third-party cryptographic dependency is `@noble/curves`, for secp256k1 only.** No engine's WebCrypto has the curve, and Vault does no hand-rolled crypto. It is pinned exactly to 2.3.0, its independently audited release (Trail of Bits, August 2026, full scope, as the Security section of the 2.4.0 README records; 2.3.0's own README predates the audit); the newer 2.4.0 has only AI-assisted self-audits, and its hardening concerns misuse that Vault's calls don't make. Its one dependency, `@noble/hashes`, arrives through its exact pin as 2.3.0. `package-lock.json` carries the integrity hash of both, and `npm audit signatures` verifies their registry signatures. Every option of every call is passed explicitly (`src/key-types/secp256k1.ts`), so a changed library default can't change what a `secp256k1` signature is.
 
 The sealing construction (`src/seal.ts`) composes native primitives in the shape of HPKE base mode: a one-time key per seal, both public keys in the KDF context, and AEAD with associated data. It is not wire-compatible with HPKE. A value sealed by the v1 code is kept as a known-answer test, `storage › a value sealed by format v1 still opens…`. Any change to the derivation fails that test, even when it alters `seal` and `unseal` alike and every round trip still passes.
 

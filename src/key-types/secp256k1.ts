@@ -62,12 +62,18 @@ function randomScalar() {
   }
 }
 
-/** 1 ≤ d < n, compared byte by byte: the secret never becomes an immutable bigint of ours. */
+/**
+ * 1 ≤ d < n, compared byte by byte: the secret never becomes an immutable bigint of ours. Every byte is read,
+ * with no early exit; JS still promises no constant time.
+ */
 function isScalar(bytes: Bytes): boolean {
-  if (bytes.length !== SCALAR_LENGTH || bytes.every((byte) => byte === 0)) return false;
+  if (bytes.length !== SCALAR_LENGTH) return false;
+  let [nonZero, below, equal] = [0, 0, 1];
   for (let i = 0; i < SCALAR_LENGTH; i++) {
     const [byte = 0, limit = 0] = [bytes[i], ORDER[i]];
-    if (byte !== limit) return byte < limit;
+    nonZero |= byte;
+    below |= equal & Number(byte < limit);
+    equal &= Number(byte === limit);
   }
-  return false; // equal to n
+  return nonZero !== 0 && below === 1;
 }

@@ -187,7 +187,7 @@ describe('secp256k1', () => {
   // https://github.com/bitcoinjs/bitcoinjs-lib/blob/v3.3.2/test/fixtures/ecdsa.json (its s is already low).
   test('a published deterministic-ECDSA vector is reproduced exactly', async () => {
     const { scope, name } = await openVault();
-    await scope.generate('secp256k1');
+    await scope.generate('secp256k1'); // creates the vault: planting needs its public wrapping key
     const id = await plantKey(name, scope.name, 'secp256k1', SECP256K1_G, sealPlaintext(one)); // d = 1, so Q = G
     const data = new TextEncoder().encode('Everything should be made as simple as possible, but not simpler.');
 

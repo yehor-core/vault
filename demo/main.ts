@@ -4,17 +4,17 @@ import { Vault, VaultError, type KeyInfo, type KeyTypeName } from '../src/index.
 // One fixed scope: whether the demo shows scopes is decided later.
 const SCOPE = 'demo';
 
-function element(id: string): HTMLElement {
+function element<T extends HTMLElement>(id: string, type: new () => T): T {
   const found = document.getElementById(id);
-  if (!found) throw new Error(`The demo page has no #${id}`);
+  if (!(found instanceof type)) throw new Error(`The demo page has no #${id} of type ${type.name}`);
   return found;
 }
 
-const status = element('status');
-const rows = element('keys');
-const output = element('output');
-const messageInput = element('message') as HTMLInputElement;
-const typeSelect = element('type') as HTMLSelectElement;
+const status = element('status', HTMLElement);
+const rows = element('keys', HTMLElement);
+const output = element('output', HTMLElement);
+const messageInput = element('message', HTMLInputElement);
+const typeSelect = element('type', HTMLSelectElement);
 const keyTypeNames: readonly string[] = ['ed25519', 'secp256k1'] satisfies KeyTypeName[];
 
 const hex = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
@@ -106,9 +106,9 @@ const vault = await Vault.open().catch((error: unknown) => {
   throw error;
 });
 const keys = vault.scope(SCOPE);
-element('scope').textContent = SCOPE;
-element('generate').onclick = () => run(async () => void (await keys.generate(selectedType())));
-element('wipe').onclick = () =>
+element('scope', HTMLElement).textContent = SCOPE;
+element('generate', HTMLElement).onclick = () => run(async () => void (await keys.generate(selectedType())));
+element('wipe', HTMLElement).onclick = () =>
   run(async () => {
     await vault.wipe();
     output.textContent = '—';
