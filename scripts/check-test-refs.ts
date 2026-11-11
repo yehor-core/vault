@@ -52,6 +52,8 @@ function matches(cited: string, title: string): boolean {
   const placeholder = title.search(PLACEHOLDER);
   if (placeholder === -1) return title.startsWith(cited);
   const head = title.slice(0, placeholder);
+  // A title that is only a placeholder (describe.each(keyTypeCases)('$type')) would match any citation.
+  if (head.trim() === '') return false;
   return cited.startsWith(head) || head.startsWith(cited);
 }
 

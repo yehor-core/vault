@@ -74,6 +74,12 @@ function readUint(value: unknown, name: string): number {
   return value;
 }
 
+function readPublicKey(value: unknown, name: string, type: KeyTypeName): Bytes {
+  const bytes = readBytes(value, name);
+  if (!keyTypes[type].isPublicKey(bytes)) throw corrupted(name);
+  return bytes;
+}
+
 function readKeyType(value: unknown, name: string): KeyTypeName {
   if (!isKeyTypeName(value)) throw corrupted(name);
   return value;
@@ -132,7 +138,7 @@ function parseKeyShape(value: unknown): KeyRecord {
     scope: readScopeName(key.scope, 'key.scope'),
     id: readString(key.id, 'key.id'),
     type,
-    publicKey: readBytes(key.publicKey, 'key.publicKey', keyTypes[type].publicKeyLength),
+    publicKey: readPublicKey(key.publicKey, 'key.publicKey', type),
     createdAt: readUint(key.createdAt, 'key.createdAt'),
     sealed: parseSealed(key.sealed),
   };

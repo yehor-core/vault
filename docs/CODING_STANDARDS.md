@@ -37,7 +37,8 @@ Checked by `/code-review` against every diff. Rules marked _(oxlint)_ or _(tsc)_
 
 ## Key types
 
-- The core never branches on a key type name. Type-specific behaviour lives behind `KeyType` (`src/key-types.ts`) and its registry.
+- The core never names a key type, not even in a comment. Type-specific behaviour lives in a module in `src/key-types/` behind `KeyType` (`src/key-types.ts`) and its registry. `key-types › no core file names a registered key type` enforces it.
+- Every test about keys runs once per registered key type (`describe.each(keyTypeCases)`). Type-specific test inputs live only in `keyTypeCases` in `test/unit/helpers.ts`; a test of one type's own behaviour says so in a comment. Format tests (`records ›`) pin bytes of one type and are exempt.
 
 ## Errors
 
