@@ -17,8 +17,8 @@ Roadmap → slice → spec → tickets → one PR per ticket. I start each step.
 5. I review and merge each PR. After the last ticket of a slice is merged: `/wrap-up`.
 
 ## Tests
-- A test written before its code proves it can fail by its red run. A test added to existing code is break-checked: break the code it guards once, show it red, restore, and commit only the restored code. `npm run break-check` does all three.
-- In `/implement`, the seams are the public API the ticket changes, tested where its acceptance criteria are observable. Name them in your first message and go on; the tdd skill's confirmation step is satisfied by the ticket.
+- A test written before its code proves it can fail by its red run. A test added to existing code is break-checked: break the code it guards once, show it red, restore, and commit only the restored code. `npm run break-check` does all three (`--typecheck` for type-level tests, `--batch` for several breaks).
+- In `/implement`, call the tdd skill before the first edit under `src/` or `demo/`: each new test runs red before its code exists. The seams are the public API the ticket changes, tested where its acceptance criteria are observable. Name them in your first message and go on; the tdd skill's confirmation step is satisfied by the ticket.
 
 ## Git
 - One ticket = one branch = one PR. Before `/implement`, create `S<N>/<NN>-<short-name>` from an up-to-date `main`.
@@ -31,7 +31,7 @@ Roadmap → slice → spec → tickets → one PR per ticket. I start each step.
 ## Ticket done means
 1. Every acceptance criterion in the ticket is met.
 2. `npm test` passes (script tests, unit tests in Chromium, Firefox and WebKit, then e2e); show the summary. If a test can't run in an engine, say which and why.
-3. `npm run lint`, `npm run typecheck`, `npm run check:refs` and `npm run check:decisions` pass.
+3. `npm run lint`, `npm run format:check`, `npm run typecheck`, `npm run check:refs`, `npm run check:casts` and `npm run check:decisions` pass.
 4. `/code-review` findings are fixed or listed in the PR with a reason.
 5. DECISIONS.md, the DESIGN.md sections and the README "Property → test" rows this ticket touches are updated; every guarantee names its test or code.
 6. The PR is open; post the link in chat. Then stop and wait.

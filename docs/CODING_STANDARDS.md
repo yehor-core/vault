@@ -9,7 +9,7 @@ Checked by `/code-review` against every diff. Rules marked _(oxlint)_ or _(tsc)_
 - In `src/` and `demo/`, name an awaited value before passing it on: no `await` inside function arguments or array literals. Tests may write `expect(await …)`. _(lint)_
 - No non-null assertions (`!`). _(oxlint)_
 - No unused imports, locals or parameters. _(tsc)_
-- `as` only narrows a value already checked at runtime, or a generic type TypeScript can't follow. Never use it to skip a check.
+- `as` only narrows a value already checked at runtime, or a generic type TypeScript can't follow. Never use it to skip a check. In `src/` and `demo/`, a comment holding `` `as`: `` on its line or the line above names that check: `npm run check:casts` enforces the comment, the reviewer checks that the reason holds.
 
 ## Untrusted input
 
@@ -38,7 +38,7 @@ Checked by `/code-review` against every diff. Rules marked _(oxlint)_ or _(tsc)_
 ## Key types
 
 - The core never names a key type, not even in a comment. Type-specific behaviour lives in a module in `src/key-types/` behind `KeyType` (`src/key-types.ts`) and its registry. `key-types › no core file names a registered key type` enforces it.
-- Every test about keys runs once per registered key type (`describe.each(keyTypeCases)`). Type-specific test inputs live only in `keyTypeCases` in `test/unit/helpers.ts`; a test of one type's own behaviour says so in a comment. Format tests (`records ›`) pin bytes of one type and are exempt.
+- Every test about keys runs once per registered key type (`describe.each(keyTypeCases)`). Type-specific test inputs live only in `keyTypeCases` in `test/unit/helpers.ts`; a test of one type's own behaviour says so in a comment. Format tests (`records ›`) pin bytes of one type and are exempt. So are type-level tests (`expectTypeOf`), which name each key type explicitly: static narrowing can't iterate the table.
 
 ## Errors
 

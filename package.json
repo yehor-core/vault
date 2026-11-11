@@ -19,6 +19,8 @@
     "check:refs": "node scripts/check-test-refs.ts",
     "check:decisions": "node scripts/check-decisions.ts",
     "lint": "oxlint",
+    "format:check": "prettier --check .",
+    "check:casts": "node scripts/check-casts.ts",
     "break-check": "node scripts/break-check.ts",
     "test": "npm run test:scripts && npm run test:unit && npm run test:e2e",
     "test:scripts": "node --test scripts/*.test.ts",

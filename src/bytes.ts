@@ -22,7 +22,7 @@ export function isBytes(value: unknown): value is Bytes {
 
 /** A safe, non-negative integer. */
 export function isUint(value: unknown): value is number {
-  return Number.isSafeInteger(value) && (value as number) >= 0;
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
 // Converters: one value into raw bytes.

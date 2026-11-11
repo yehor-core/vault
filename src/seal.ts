@@ -68,13 +68,22 @@ async function encapsulate(recipientPublicKey: Bytes): Promise<{ sharedKey: Cryp
 }
 
 /** The recipient re-derives the same key from its private key and the stored one-time public key. */
-async function decapsulate(privateKey: CryptoKey, ephemeralPublicKey: Bytes, recipientPublicKey: Bytes): Promise<CryptoKey> {
+async function decapsulate(
+  privateKey: CryptoKey,
+  ephemeralPublicKey: Bytes,
+  recipientPublicKey: Bytes,
+): Promise<CryptoKey> {
   const ephemeral = await importPublicKey(ephemeralPublicKey);
   return deriveSharedKey(privateKey, ephemeral, ephemeralPublicKey, recipientPublicKey);
 }
 
 // Both public keys enter HKDF, so the AES key is bound to this exact ephemeral and wrapping key pair.
-async function deriveSharedKey(privateKey: CryptoKey, publicKey: CryptoKey, ephemeralSpki: Bytes, recipientSpki: Bytes) {
+async function deriveSharedKey(
+  privateKey: CryptoKey,
+  publicKey: CryptoKey,
+  ephemeralSpki: Bytes,
+  recipientSpki: Bytes,
+) {
   const secret = await ecdhSecret(privateKey, publicKey);
   const info = encode(SEAL_LABEL, ephemeralSpki, recipientSpki);
   return hkdfToAes(secret, info);
