@@ -21,6 +21,7 @@ afterEach(async () => {
 const bytes = (hex: string) => Uint8Array.fromHex(hex);
 
 // Produced once by the format-v1 code (in Node). They pin what is stored: a change here is a format change.
+// prettier-ignore
 const V1 = {
   keyId: 'B6h_TBknJmr8oKLDQBw6xpa3YjhqXWUIrxyA7p0kLNw',
   keyAad:

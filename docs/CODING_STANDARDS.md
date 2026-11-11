@@ -1,13 +1,14 @@
 # Coding standards
 
-Checked by `/code-review` against every diff. Rules marked _(lint)_ are mechanical: move them to a linter once the repo has one.
+Checked by `/code-review` against every diff. Rules marked _(oxlint)_ or _(tsc)_ are enforced by `npm run lint` or `npm run typecheck` in the pre-commit hook and CI; the reviewer skips them. Rules marked _(lint)_ are mechanical but have no tool yet.
 
 ## General
 
 - Minimal code; nothing speculative. The task rewards simplicity.
 - Comments explain only the non-obvious why, in one or two lines. No tutorials in code.
-- No `await` inside function arguments or array literals; name the intermediate value. _(lint)_
-- No non-null assertions (`!`). _(lint)_
+- In `src/` and `demo/`, name an awaited value before passing it on: no `await` inside function arguments or array literals. Tests may write `expect(await …)`. _(lint)_
+- No non-null assertions (`!`). _(oxlint)_
+- No unused imports, locals or parameters. _(tsc)_
 - `as` only narrows a value already checked at runtime, or a generic type TypeScript can't follow. Never use it to skip a check.
 
 ## Untrusted input
@@ -21,7 +22,7 @@ Checked by `/code-review` against every diff. Rules marked _(lint)_ are mechanic
 - Every hashed or authenticated value goes through `encode` (`src/bytes.ts`); no ad-hoc concatenation.
 - Format constants (domain-separation labels, encoding tags, lengths, store names, the default database name) are each defined once, as a named constant.
 - A new stored field of a key record is bound into its AAD, unless a decision in `docs/DECISIONS.md` says otherwise.
-- A change to the bytes of an existing record, id or AAD needs a format version bump. The v1 known-answer tests (`records › format v1 regression`, `storage › encodes the exact v1 bytes…`, `storage › a value sealed by format v1 still opens…`) catch it; never edit them to make a change pass.
+- A change to the bytes of an existing record, id or AAD needs a format version bump. The v1 known-answer tests (`records › format v1 regression`, `storage › encodes the exact v1 bytes…`, `storage › a value sealed by format v1 still opens…`) catch it; never edit them to make a change pass. Each known-answer literal carries `// prettier-ignore`, so a formatter run or a Prettier config change can't rewrite it.
 
 ## Transactions
 

@@ -3,10 +3,16 @@ import { Vault, VaultError, type KeyInfo } from '../src/index.ts';
 // One fixed scope: whether the demo shows scopes is decided later.
 const SCOPE = 'demo';
 
-const status = document.getElementById('status')!;
-const rows = document.getElementById('keys')!;
-const output = document.getElementById('output')!;
-const messageInput = document.getElementById('message') as HTMLInputElement;
+function element(id: string): HTMLElement {
+  const found = document.getElementById(id);
+  if (!found) throw new Error(`The demo page has no #${id}`);
+  return found;
+}
+
+const status = element('status');
+const rows = element('keys');
+const output = element('output');
+const messageInput = element('message') as HTMLInputElement;
 
 const hex = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 
@@ -79,10 +85,9 @@ const vault = await Vault.open().catch((error: unknown) => {
   throw error;
 });
 const keys = vault.scope(SCOPE);
-const scopeLabel = document.getElementById('scope');
-if (scopeLabel) scopeLabel.textContent = SCOPE;
-document.getElementById('generate')!.onclick = () => run(async () => void (await keys.generate('ed25519')));
-document.getElementById('wipe')!.onclick = () =>
+element('scope').textContent = SCOPE;
+element('generate').onclick = () => run(async () => void (await keys.generate('ed25519')));
+element('wipe').onclick = () =>
   run(async () => {
     await vault.wipe();
     output.textContent = '—';

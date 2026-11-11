@@ -17,7 +17,7 @@ Roadmap → slice → spec → tickets → one PR per ticket. I start each step.
 5. I review and merge each PR. After the last ticket of a slice is merged: `/wrap-up`.
 
 ## Tests
-- A test written before its code proves it can fail by its red run. A test added to existing code is break-checked: break the code it guards once, show it red, restore, and commit only the restored code.
+- A test written before its code proves it can fail by its red run. A test added to existing code is break-checked: break the code it guards once, show it red, restore, and commit only the restored code. `npm run break-check` does all three.
 
 ## Git
 - One ticket = one branch = one PR. Before `/implement`, create `S<N>/<NN>-<short-name>` from an up-to-date `main`.
@@ -29,7 +29,7 @@ Roadmap → slice → spec → tickets → one PR per ticket. I start each step.
 ## Ticket done means
 1. Every acceptance criterion in the ticket is met.
 2. `npm test` passes (unit tests in Chromium, Firefox and WebKit, then e2e); show the summary. If a test can't run in an engine, say which and why.
-3. `npm run typecheck` and `npm run check:refs` pass.
+3. `npm run lint`, `npm run typecheck` and `npm run check:refs` pass.
 4. `/code-review` findings are fixed or listed in the PR with a reason.
 5. DECISIONS.md, the DESIGN.md sections and the README "Property → test" rows this ticket touches are updated; every guarantee names its test or code.
 6. The PR is open; post the link in chat. Then stop and wait.

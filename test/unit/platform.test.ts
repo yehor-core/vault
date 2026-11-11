@@ -8,7 +8,9 @@ const engineUserAgent: Record<string, RegExp> = {
 };
 
 test('runs in the real browser engine it is configured for', () => {
-  expect(navigator.userAgent).toMatch(engineUserAgent[server.browser]!);
+  const expected = engineUserAgent[server.browser];
+  if (!expected) throw new Error(`No user agent pattern for ${server.browser}`);
+  expect(navigator.userAgent).toMatch(expected);
   expect(indexedDB).toBeInstanceOf(IDBFactory);
   expect(isSecureContext).toBe(true);
 });
