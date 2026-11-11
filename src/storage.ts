@@ -10,12 +10,20 @@ export const HEADER_KEY = 'header';
 
 /**
  * The header, or undefined for an empty vault. Key records without a header mean the header was
- * deleted, never that the vault is new: no legitimate write leaves one without the other.
+ * deleted, never that the vault is new: no legitimate write leaves one without the other. Any other
+ * record in `meta` is corrupted (D-35): Vault writes none, and a later format must not trust a planted one.
  */
 export async function readHeader(tx: IDBTransaction): Promise<HeaderRecord | undefined> {
   const meta = tx.objectStore(META_STORE);
   // count, not get: a header stored as `undefined` is present and malformed, not absent.
-  const [present, value] = await Promise.all([request(meta.count(HEADER_KEY)), request(meta.get(HEADER_KEY))]);
+  // Two keys are enough: if one is the header, the other is not.
+  const [present, value, keys] = await Promise.all([
+    request(meta.count(HEADER_KEY)),
+    request(meta.get(HEADER_KEY)),
+    request(meta.getAllKeys(null, 2)),
+  ]);
+  const foreign = keys.find((key) => key !== HEADER_KEY);
+  if (foreign !== undefined) throw corrupted(`meta: unexpected record ${String(foreign)}`);
   if (present) return parseHeader(value);
   if (await request(tx.objectStore(KEYS_STORE).count())) throw corrupted('key records exist without a vault header');
   return undefined;

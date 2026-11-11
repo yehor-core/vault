@@ -122,9 +122,15 @@ const cleanups: (() => Promise<void>)[] = [];
 /** The scope `openVault` hands out. Not 'default', so code still bound to S1's fixed scope fails the tests. */
 export const TEST_SCOPE = 'test';
 
-/** A vault on a fresh, uniquely named database, and its scope TEST_SCOPE; closed and deleted by `cleanup`. */
-export async function openVault(): Promise<{ vault: Vault; scope: Scope; name: string }> {
+/**
+ * A vault on a fresh, uniquely named database, and its scope TEST_SCOPE; closed and deleted by `cleanup`.
+ * `before` gets the database name before Vault first opens it.
+ */
+export async function openVault(
+  options: { before?: (name: string) => Promise<void> } = {},
+): Promise<{ vault: Vault; scope: Scope; name: string }> {
   const name = `test-${crypto.randomUUID()}`;
+  await options.before?.(name);
   const vault = await Vault.open({ name });
   cleanups.push(async () => {
     vault.close();

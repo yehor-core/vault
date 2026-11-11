@@ -3,6 +3,7 @@ import { Vault } from '../../src/index.ts';
 import { keyAad, keyId, parseHeader, parseKeyRecord } from '../../src/records.ts';
 import {
   cleanup,
+  deleteHeader,
   done,
   expectVaultError,
   keyRef,
@@ -344,5 +345,71 @@ describe('strict parsing', () => {
     await replaceKey(name, scope.name, record.id, record);
     await writeHeader(name, { ...header, extra: 1 });
     await expectVaultError(scope.list(), 'corrupted');
+  });
+});
+
+describe('foreign records', () => {
+  const message = new TextEncoder().encode('message');
+  const plantMeta = (name: string, key: IDBValidKey) =>
+    rawRun(name, ['meta'], (tx) => void tx.objectStore('meta').put({ v: 1 }, key));
+
+  // Vault writes only 'header' into meta: anything else is planted, or a format this build doesn't know.
+  test.each([
+    { header: true, keys: true },
+    { header: true, keys: false },
+    { header: false, keys: true },
+    { header: false, keys: false },
+  ])(
+    'a record in meta other than the header makes list, generate and sign fail with corrupted, naming it: header $header, keys $keys',
+    async ({ header, keys }) => {
+      const { scope, name } = await openVault();
+      const key = await scope.generate('ed25519');
+      if (!keys) await rawRun(name, ['keys'], (tx) => void tx.objectStore('keys').clear());
+      if (!header) await deleteHeader(name);
+      await plantMeta(name, 'header2');
+
+      for (const call of [() => scope.list(), () => scope.generate('ed25519'), () => scope.sign(key, message)]) {
+        const error = await expectVaultError(call(), 'corrupted');
+        expect(error.message).toBe('Corrupted storage: meta: unexpected record header2');
+      }
+    },
+  );
+
+  test('wipe recovers a vault with a foreign record in meta; the next generate starts a new vault', async () => {
+    const { vault, scope, name } = await openVault();
+    await scope.generate('ed25519');
+    const oldHeader = await readHeader(name);
+    await plantMeta(name, 'extra');
+    await expectVaultError(scope.list(), 'corrupted');
+
+    await vault.wipe();
+
+    expect(await scope.list()).toEqual([]);
+    const fresh = await scope.generate('ed25519');
+    expect(await scope.list()).toEqual([fresh]);
+    expect((await readHeader(name)).wrappingPublicKey).not.toEqual(oldHeader.wrappingPublicKey);
+  });
+
+  // Never read, so it can't mislead Vault; rejecting it would leave a vault that wipe can't recover.
+  test('an object store that is not Vault’s is ignored: open, list, generate, sign and wipe work as before', async () => {
+    const { vault, scope } = await openVault({
+      // At Vault's version, with Vault's stores and one more holding a record, as another library could create it.
+      async before(name) {
+        const request = indexedDB.open(name, 1);
+        request.onupgradeneeded = () => {
+          request.result.createObjectStore('meta');
+          request.result.createObjectStore('keys', { keyPath: ['scope', 'id'] });
+          request.result.createObjectStore('other').add({ v: 1 }, 'header');
+        };
+        (await done(request)).close();
+      },
+    });
+
+    expect(await scope.list()).toEqual([]);
+    const key = await scope.generate('ed25519');
+    expect(await scope.list()).toEqual([key]);
+    expect((await scope.sign(key, message)).type).toBe('ed25519');
+    await vault.wipe();
+    expect(await scope.list()).toEqual([]);
   });
 });
