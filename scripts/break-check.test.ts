@@ -1,10 +1,10 @@
-// break-check's --typecheck and --batch modes on a fixture repo whose `npm run typecheck` is a stand-in: it fails,
-// naming test/types.test.ts, when src/code.ts holds BROKEN, and naming test/other.test.ts on OTHER. The vitest
-// mode needs real browsers and is not covered here.
+// break-check on a fixture repo whose `npm run typecheck` is a stand-in: it fails, naming test/types.test.ts, when
+// src/code.ts holds BROKEN, and naming test/other.test.ts on OTHER. `npx` is a stand-in too: its vitest run fails
+// in the engines listed in FAKE_RED and passes in the others, so the engine handling runs without browsers.
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -16,17 +16,33 @@ const source = require('node:fs').readFileSync('src/code.ts', 'utf8');
 if (source.includes('BROKEN')) { console.log('test/types.test.ts(1,1): error TS2344'); process.exit(1); }
 if (source.includes('OTHER')) { console.log('test/other.test.ts(1,1): error TS2344'); process.exit(1); }
 `;
+// The engine is the last argument break-check passes: `vitest run <test> -t <pattern> --project <engine>`.
+const NPX = `#!/bin/sh
+for arg in "$@"; do engine=$arg; done
+case " $FAKE_RED " in
+  *" $engine "*) echo ' Tests  1 failed (1)'; echo ' × the guarded test'; exit 1 ;;
+esac
+echo ' Tests  1 passed (1)'
+`;
 
 /** Runs break-check with `args` in a fresh fixture; returns its exit status, output and src/code.ts afterwards. */
-function breakCheck(args: string[], batch?: unknown): { status: number | null; output: string; code: string } {
+function breakCheck(
+  args: string[],
+  batch?: unknown,
+  fakeRed = '',
+): { status: number | null; output: string; code: string } {
   const dir = mkdtempSync(join(tmpdir(), 'break-check-'));
   try {
     mkdirSync(join(dir, 'src'));
     writeFileSync(join(dir, 'src/code.ts'), CODE);
     writeFileSync(join(dir, 'typecheck.cjs'), TYPECHECK);
     writeFileSync(join(dir, 'package.json'), JSON.stringify({ scripts: { typecheck: 'node typecheck.cjs' } }));
+    mkdirSync(join(dir, 'bin'));
+    writeFileSync(join(dir, 'bin/npx'), NPX);
+    chmodSync(join(dir, 'bin/npx'), 0o755);
     if (batch !== undefined) writeFileSync(join(dir, 'breaks.json'), JSON.stringify(batch));
-    const run = spawnSync(process.execPath, [SCRIPT, ...args], { cwd: dir, encoding: 'utf8' });
+    const env = { ...process.env, PATH: `${join(dir, 'bin')}:${process.env.PATH}`, FAKE_RED: fakeRed };
+    const run = spawnSync(process.execPath, [SCRIPT, ...args], { cwd: dir, encoding: 'utf8', env });
     return {
       status: run.status,
       output: `${run.stdout}${run.stderr}`,
@@ -82,4 +98,40 @@ test('--batch: runs every break alone and exits 0 only if each went red', () => 
   assert.equal(one.status, 1, one.output);
   assert.match(one.output, /1 of 2 breaks not red/);
   assert.equal(one.code, CODE);
+});
+
+const vitestBreak = ['src/code.ts', 'true', 'false', 'test/unit/code.test.ts', 'the guarded test'];
+
+test('a vitest break runs in Chromium, Firefox and WebKit by default, and is red only if red in each', () => {
+  const all = breakCheck(vitestBreak, undefined, 'chromium firefox webkit');
+  assert.equal(all.status, 0, all.output);
+  assert.deepEqual(all.output.match(/^red in \w+/gm), ['red in chromium', 'red in firefox', 'red in webkit']);
+  assert.equal(all.code, CODE);
+
+  const two = breakCheck(vitestBreak, undefined, 'chromium firefox');
+  assert.equal(two.status, 1, two.output);
+  assert.match(two.output, /^NOT red in webkit/m);
+});
+
+test('a named engine runs the vitest break in that engine alone', () => {
+  const webkit = breakCheck([...vitestBreak, 'webkit'], undefined, 'webkit');
+  assert.equal(webkit.status, 0, webkit.output);
+  assert.deepEqual(webkit.output.match(/red in \w+/g), ['red in webkit']);
+
+  const batch = breakCheck(
+    ['--batch', 'breaks.json'],
+    [
+      {
+        file: 'src/code.ts',
+        text: 'true',
+        replacement: 'false',
+        test: 'test/unit/code.test.ts',
+        pattern: 'the guarded test',
+        engine: 'firefox',
+      },
+    ],
+    'chromium',
+  );
+  assert.equal(batch.status, 1, batch.output);
+  assert.deepEqual(batch.output.match(/red in \w+/g), ['red in firefox']);
 });

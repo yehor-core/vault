@@ -4,6 +4,9 @@
 //   npm run break-check -- --typecheck <source file> <text> <replacement> <test file>
 //   npm run break-check -- --batch <breaks.json>
 //
+// Without an engine, a vitest break runs in Chromium, Firefox and WebKit, and is red only if it went red in each:
+// the README's Property → test rows claim every listed engine. Name one engine for a fast loop, or for a guard that
+// only one engine needs.
 // --typecheck is for type-level tests: red means `npm run typecheck` failed with an error in <test file>.
 // --batch reads a JSON array of { file, text, replacement, test, pattern?, engine?, typecheck? } and runs each
 // break alone. The text must occur exactly once. The file is restored after every break, Ctrl-C included.
@@ -21,6 +24,9 @@ interface Break {
   readonly engine?: string | undefined;
   readonly typecheck?: boolean;
 }
+
+// The browser instances in vitest.config.ts.
+const ENGINES = ['chromium', 'firefox', 'webkit'] as const;
 
 const USAGE = `usage: npm run break-check -- <source file> <text> <replacement> <test file> <test name pattern> [engine]
        npm run break-check -- --typecheck <source file> <text> <replacement> <test file>
@@ -94,7 +100,12 @@ function typecheckRed(spec: Break): boolean {
 }
 
 function vitestRed(spec: Break): boolean {
-  const engine = spec.engine ?? 'chromium';
+  const engines = spec.engine === undefined ? ENGINES : [spec.engine];
+  // Every engine runs, even after one stays green, so the output shows the whole picture.
+  return engines.map((engine) => vitestRedIn(spec, engine)).every(Boolean);
+}
+
+function vitestRedIn(spec: Break, engine: string): boolean {
   const args = ['vitest', 'run', spec.test, '-t', spec.pattern ?? '', '--project', engine];
   const run = spawnSync('npx', args, { encoding: 'utf8' });
   const output = `${run.stdout}${run.stderr}`;

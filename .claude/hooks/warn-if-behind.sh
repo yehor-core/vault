@@ -4,7 +4,10 @@
 # (a stacked PR whose base merged first), so its commits never reached main. It never blocks: offline, without
 # gh, or outside a repository it stays silent.
 
-cd "${CLAUDE_PROJECT_DIR:-.}" 2>/dev/null || exit 0
+# The session's own directory, from the hook input: in a worktree session it is the worktree, while
+# CLAUDE_PROJECT_DIR is the main checkout.
+[[ -t 0 ]] || dir=$(jq -r '.cwd // empty' 2>/dev/null)
+cd "${dir:-${CLAUDE_PROJECT_DIR:-.}}" 2>/dev/null || exit 0
 git fetch --quiet origin 2>/dev/null || exit 0
 branch=$(git symbolic-ref --short -q HEAD || echo 'detached HEAD')
 
