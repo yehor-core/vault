@@ -28,7 +28,7 @@ Status: done · Spec: #9 · Tickets: #11, #13, #12, #14, #15, #16, #17
 Not included: scopes in the demo, which stays on one fixed scope (S7 decides)
 
 ## S3: Storage integrity
-Status: planned · Spec: #- · Tickets: #-
+Status: in progress · Spec: #35 · Tickets: #36, #39, #37, #38, #40
 - record validation, fail closed on tampered or malformed records
 - atomic multi-record writes
 - empty vault, eviction, persistent storage
