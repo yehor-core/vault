@@ -20,7 +20,7 @@ Vault is a browser-native private-key store on IndexedDB. An application calls i
 | Optional, upgradeable protection | Format ready; upgrade not built yet | §3.1, §5 |
 | Cheap to add, gated to use | Adding needs only the public wrapping key | §3.1 |
 | Many key types, one model | ed25519 and secp256k1; a new sealed key type is one module and one registry entry | §7.5 |
-| Correct under concurrency and failure | Atomic writes, fail-closed reads; no lost updates and first-time setup tested across tabs, wipe races not yet (#54) | §4.2, §6 |
+| Correct under concurrency and failure | Atomic writes, fail-closed reads; no lost updates, first-time setup and a stale context against a wipe tested across tabs | §4.2, §6 |
 | A small, idiomatic domain API | Built for unprotected ed25519 and secp256k1 keys in named scopes | §7 |
 
 ## 2. Threat model
