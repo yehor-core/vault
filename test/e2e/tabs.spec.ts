@@ -8,6 +8,7 @@ import {
   openDemo,
   startGenerate,
   type PageKey,
+  wipe,
 } from './contexts.ts';
 
 // Several tabs on one vault (D-43): two pages of one browser context share its IndexedDB, as two tabs do.
@@ -67,4 +68,26 @@ test('concurrent first generates from two tabs converge on one vault: both keys 
   expect(winnerMeta).toHaveLength(1);
   expect(await metaRecords(a)).toEqual(winnerMeta);
   await expectKeysInEvery([a, b], [key, other]);
+});
+
+test('a generate held in one tab while another tab wipes resolves in a new vault: only its new key lists and signs in both tabs, under a new header', async ({
+  context,
+}) => {
+  const a = await openDemo(context);
+  const b = await openDemo(context);
+  await generate(a);
+  await generate(b);
+  const wipedMeta = await metaRecords(a);
+  const held = await holdKeyGeneration(a); // a has read the header it will seal to
+
+  const pending = await startGenerate(a);
+  await held.reached;
+  await wipe(b);
+  await held.release();
+  const key = await pending.settled(); // a's header check fails: a redoes against the empty vault, without an error
+
+  const meta = await metaRecords(b);
+  expect(meta).toHaveLength(1); // the header is the only record meta holds
+  expect(meta).not.toEqual(wipedMeta);
+  await expectKeysInEvery([a, b], [key]);
 });

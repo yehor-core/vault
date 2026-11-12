@@ -8,6 +8,7 @@ import {
   openContexts,
   readAll,
   readHeader,
+  TEST_SCOPE,
   type KeyTypeCase,
 } from './helpers.ts';
 
@@ -100,6 +101,43 @@ describe.each(keyTypeCases)('$type', ({ type, verify }) => {
       const { meta } = await readAll(a.name); // the header is the only record meta holds
       expect(meta).toEqual([expect.objectContaining({ wrappingPublicKey: winnerHeader.wrappingPublicKey })]);
       await expectKeysInEvery([a.vault, b.vault], [key, other], verify);
+    });
+  });
+
+  describe('a stale context against a wipe', () => {
+    test('a generate held while another context wipes: it resolves, and the vault holds only its new key, under a new header, which lists and signs in both contexts', async () => {
+      const [a, b] = await openContexts();
+      await a.scope.generate(type);
+      await a.vault.scope(OTHER_SCOPE).generate(type);
+      const wipedHeader = await readHeader(a.name);
+      const held = holdGenerate(type); // a has read the header it will seal to
+
+      const pending = a.scope.generate(type);
+      await held.reached;
+      await b.vault.wipe();
+      held.release();
+      const key = await pending; // a's header check fails: a redoes against the empty vault, without an error
+
+      const { meta, keys } = await readAll(a.name);
+      // the header is the only record meta holds; the key, the only one stored in any scope
+      expect(meta).toEqual([expect.not.objectContaining({ wrappingPublicKey: wipedHeader.wrappingPublicKey })]);
+      expect(keys).toEqual([expect.objectContaining({ scope: key.scope, id: key.id })]);
+      await expectKeysInEvery([a.vault, b.vault], [key], verify);
+    });
+
+    test('after a wipe in one context, the other lists none of the old keys, and sign with a KeyInfo from before the wipe fails with not-found', async () => {
+      const [a, b] = await openContexts();
+      const wiped = [
+        await a.scope.generate(type),
+        await b.scope.generate(type),
+        await b.vault.scope(OTHER_SCOPE).generate(type),
+      ];
+      await expectKeysInEvery([a.vault], wiped, verify); // a has read every key before the wipe
+
+      await b.vault.wipe();
+
+      for (const scope of [TEST_SCOPE, OTHER_SCOPE]) expect(await a.vault.scope(scope).list()).toEqual([]);
+      for (const old of wiped) await expectVaultError(a.vault.scope(old.scope).sign(old, message), 'not-found');
     });
   });
 });
