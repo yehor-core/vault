@@ -60,11 +60,11 @@ test('concurrent first generates from two tabs converge on one vault: both keys 
   const pending = await startGenerate(a);
   await held.reached;
   const other = await generate(b); // b's header is stored first: b wins
-  const winner = await metaRecords(b);
+  const winnerMeta = await metaRecords(b);
   await held.release();
   const key = await pending.settled(); // a's header loses: a redoes against b's, without an error
 
-  expect(winner).toHaveLength(1);
-  expect(await metaRecords(a)).toEqual(winner);
+  expect(winnerMeta).toHaveLength(1);
+  expect(await metaRecords(a)).toEqual(winnerMeta);
   await expectKeysInEvery([a, b], [key, other]);
 });

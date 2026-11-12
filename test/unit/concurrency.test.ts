@@ -93,13 +93,12 @@ describe.each(keyTypeCases)('$type', ({ type, verify }) => {
       const pending = a.scope.generate(type);
       await held.reached;
       const other = await b.scope.generate(type); // b's header is stored first: b wins
-      const winner = await readHeader(a.name);
+      const winnerHeader = await readHeader(a.name);
       held.release();
       const key = await pending; // a's header loses: a redoes against b's, without an error
 
-      const { meta } = await readAll(a.name);
-      expect(meta).toHaveLength(1);
-      expect((await readHeader(a.name)).wrappingPublicKey).toEqual(winner.wrappingPublicKey);
+      const { meta } = await readAll(a.name); // the header is the only record meta holds
+      expect(meta).toEqual([expect.objectContaining({ wrappingPublicKey: winnerHeader.wrappingPublicKey })]);
       await expectKeysInEvery([a.vault, b.vault], [key, other], verify);
     });
   });
