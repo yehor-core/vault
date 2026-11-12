@@ -28,7 +28,8 @@ export class Connection {
   }
 
   // The connection is taken right before each transaction, so a call in flight across close() sees the
-  // documented InvalidStateError, and one across a versionchange reopens and gets 'incompatible'.
+  // documented InvalidStateError, and one across a versionchange reopens: it gets 'incompatible' after a newer
+  // format's upgrade, and a new, empty vault after the database was deleted.
   async transact<T>(stores: Store[], mode: IDBTransactionMode, body: (tx: IDBTransaction) => Promise<T>): Promise<T> {
     const db = await this.#connection();
     if (this.#closed) throw closedError(); // closed while we awaited; from here to db.transaction is synchronous

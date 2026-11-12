@@ -28,7 +28,7 @@ export function openDatabase(name: string, onGone: () => void): Promise<IDBDatab
         return reject(corrupted('database has no Vault stores'));
       }
       db.onversionchange = () => {
-        db.close(); // never block a newer format; our next call reopens and gets 'incompatible'
+        db.close(); // never block a newer format or a deletion; our next call reopens (D-40)
         onGone();
       };
       db.onclose = onGone;

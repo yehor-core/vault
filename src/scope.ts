@@ -190,13 +190,13 @@ export class Scope {
 
   /**
    * Crypto is done; the transaction only checks that the header is still the one we sealed to, then
-   * writes. False means the vault was wiped or its header replaced since we read it.
+   * writes. False means the vault was wiped or deleted, or its header replaced, since we read it.
    */
   async #commitKeyRecord(record: KeyRecord, header: HeaderRecord, isNew: boolean): Promise<boolean> {
     return this.#connection.transact([META_STORE, KEYS_STORE], 'readwrite', async (tx) => {
       const current = await readHeader(tx);
       if (!current) {
-        if (!isNew) return false; // wiped since we read it
+        if (!isNew) return false; // wiped or deleted since we read it
         addHeader(tx, header);
       } else if (!equalBytes(current.wrappingPublicKey, header.wrappingPublicKey)) {
         return false; // replaced since we read it (or another first write won)
