@@ -3,11 +3,13 @@ import { DEMO_SCOPE, openDemo } from './contexts.ts';
 import {
   addPasskey,
   addVirtualAuthenticator,
+  CHROMIUM_ONLY,
   expectVaultError,
   freshDevice,
   generatePasskey,
   listPasskeys,
   openWithAuthenticator,
+  shortenPromptTimeouts,
   signWithPasskey,
   verifiesOutsideVault,
 } from './passkeys.ts';
@@ -68,24 +70,6 @@ test('a passkey moved to a new browser context with an empty vault is added ther
     await device.context.close();
   }
 });
-
-/** Gives every later passkey prompt of the page a 100 ms timeout: with presence off, it then ends as a declined one. */
-async function shortenPromptTimeouts(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    const credentials = navigator.credentials;
-    const create = credentials.create.bind(credentials);
-    const get = credentials.get.bind(credentials);
-    Object.assign(credentials, {
-      create: (options: CredentialCreationOptions) =>
-        create({ ...options, ...(options.publicKey && { publicKey: { ...options.publicKey, timeout: 100 } }) }),
-      get: (options: CredentialRequestOptions) =>
-        get({ ...options, ...(options.publicKey && { publicKey: { ...options.publicKey, timeout: 100 } }) }),
-    });
-  });
-}
-
-const CHROMIUM_ONLY =
-  'Only Chromium’s virtual authenticator can decline a prompt or answer without user verification (D-62)';
 
 test.describe('Chromium virtual authenticator', () => {
   test('a passkey prompt that is never answered is cancelled, for generate and sign, and generate stores nothing', async ({

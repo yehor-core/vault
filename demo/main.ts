@@ -1,6 +1,7 @@
 /// <reference types="vite/client" />
+import { p256 } from '@noble/curves/nist.js';
 import { secp256k1 } from '@noble/curves/secp256k1.js';
-import { Vault, VaultError, type KeyInfo, type KeyTypeName } from '../src/index.ts';
+import { Vault, VaultError, type KeyInfo, type KeyTypeName, type Signature } from '../src/index.ts';
 
 // One fixed scope: whether the demo shows scopes is decided later.
 const SCOPE = 'demo';
@@ -20,7 +21,7 @@ const output = element('output', HTMLElement);
 const messageInput = element('message', HTMLInputElement);
 const typeSelect = element('type', HTMLSelectElement);
 const labelInput = element('label', HTMLInputElement);
-const keyTypeNames: readonly string[] = ['ed25519', 'secp256k1'] satisfies KeyTypeName[];
+const keyTypeNames: readonly string[] = ['ed25519', 'secp256k1', 'passkey'] satisfies KeyTypeName[];
 
 const hex = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 
@@ -49,10 +50,12 @@ function row(key: KeyInfo): HTMLTableRowElement {
   tr.dataset.id = key.id;
   tr.dataset.type = key.type;
   tr.dataset.publicKey = hex(key.publicKey);
+  if (key.type === 'passkey') tr.dataset.credentialId = hex(key.credentialId);
   const cells = [
     key.id.slice(0, 12) + '…',
     key.label ?? '',
     key.type,
+    key.type === 'passkey' ? hex(key.credentialId).slice(0, 16) + '…' : '',
     hex(key.publicKey).slice(0, 16) + '…',
     key.createdAt.toLocaleTimeString(),
   ];
@@ -75,37 +78,94 @@ function button(label: string, action: () => Promise<void>): HTMLButtonElement {
 
 async function sign(key: KeyInfo) {
   const message = new TextEncoder().encode(messageInput.value);
-  const signature = await keys.sign(key, message);
-  if (signature.type === 'passkey') throw new Error('The demo creates no passkey keys yet, so it shows no assertion');
-  const verified = await verify(key, signature.bytes, message);
-  output.dataset.type = signature.type;
-  output.dataset.signature = hex(signature.bytes);
-  output.dataset.verified = String(verified);
-  output.textContent = [
+  const signature = await keys.sign(key, message); // first: a passkey prompt starts inside the click
+  const verified = await verify(key.publicKey, signature, message);
+  const lines = [
     `key        ${key.id}`,
     `public key ${hex(key.publicKey)}`,
     `message    ${JSON.stringify(messageInput.value)}`,
-    `signature  ${hex(signature.bytes)}`,
-    `verified   ${verified}`,
-  ].join('\n');
+  ];
+  delete output.dataset.authenticatorData;
+  delete output.dataset.clientDataJson;
+  if (signature.type === 'passkey') {
+    output.dataset.authenticatorData = hex(signature.authenticatorData);
+    output.dataset.clientDataJson = hex(signature.clientDataJSON);
+    output.dataset.signature = hex(signature.signature);
+    lines.push(
+      `authenticator data ${hex(signature.authenticatorData)}`,
+      `client data        ${new TextDecoder().decode(signature.clientDataJSON)}`,
+      `signature (DER)    ${hex(signature.signature)}`,
+    );
+  } else {
+    output.dataset.signature = hex(signature.bytes);
+    lines.push(`signature  ${hex(signature.bytes)}`);
+  }
+  output.dataset.type = signature.type;
+  output.dataset.verified = String(verified);
+  output.textContent = [...lines, `verified   ${verified}`].join('\n');
 }
 
 // Verification needs only the public key: no Vault involved.
-async function verify(key: KeyInfo, signature: Uint8Array<ArrayBuffer>, message: Uint8Array<ArrayBuffer>) {
-  switch (key.type) {
+async function verify(publicKey: Uint8Array<ArrayBuffer>, signature: Signature, message: Uint8Array<ArrayBuffer>) {
+  switch (signature.type) {
     case 'ed25519': {
-      const publicKey = await crypto.subtle.importKey('raw', key.publicKey, 'Ed25519', false, ['verify']);
-      return crypto.subtle.verify('Ed25519', publicKey, signature, message);
+      const key = await crypto.subtle.importKey('raw', publicKey, 'Ed25519', false, ['verify']);
+      return crypto.subtle.verify('Ed25519', key, signature.bytes, message);
     }
     case 'secp256k1':
-      return secp256k1.verify(signature, message, key.publicKey, { prehash: true, lowS: true, format: 'compact' });
+      return secp256k1.verify(signature.bytes, message, publicKey, { prehash: true, lowS: true, format: 'compact' });
+    case 'passkey':
+      return verifyAssertion(publicKey, signature, message);
   }
+}
+
+const FLAG_UP = 0x01;
+const FLAG_UV = 0x04;
+
+/**
+ * Checks a passkey assertion as a WebAuthn relying party does: client data of type webauthn.get over
+ * SHA-256(message) from this origin, the rpId hash, the UP and UV flags, and the ES256 signature over
+ * authenticatorData ‖ SHA-256(clientDataJSON) under the SPKI public key.
+ */
+async function verifyAssertion(
+  publicKey: Uint8Array<ArrayBuffer>,
+  { authenticatorData, clientDataJSON, signature }: Signature<'passkey'>,
+  message: Uint8Array<ArrayBuffer>,
+): Promise<boolean> {
+  const sha256 = async (bytes: Uint8Array<ArrayBuffer>) => {
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    return new Uint8Array(digest);
+  };
+  const clientData: unknown = JSON.parse(new TextDecoder().decode(clientDataJSON));
+  if (typeof clientData !== 'object' || clientData === null) return false;
+  // Defaults first, so each field reads as unknown even when the client data lacks it.
+  const { type, challenge, origin } = { type: undefined, challenge: undefined, origin: undefined, ...clientData };
+  const messageHash = await sha256(message);
+  if (type !== 'webauthn.get' || origin !== location.origin) return false;
+  if (challenge !== messageHash.toBase64({ alphabet: 'base64url', omitPadding: true })) return false;
+  const rpIdHash = await sha256(new TextEncoder().encode(location.hostname));
+  if (hex(authenticatorData.subarray(0, 32)) !== hex(rpIdHash)) return false;
+  const flags = authenticatorData[32] ?? 0;
+  if ((flags & FLAG_UP) === 0 || (flags & FLAG_UV) === 0) return false;
+  const clientDataHash = await sha256(clientDataJSON);
+  const signed = new Uint8Array([...authenticatorData, ...clientDataHash]);
+  // WebCrypto takes r ‖ s, the authenticator gives DER.
+  const compact = new Uint8Array(p256.Signature.fromBytes(signature, 'der').toBytes('compact'));
+  const key = await crypto.subtle.importKey('spki', publicKey, { name: 'ECDSA', namedCurve: 'P-256' }, false, [
+    'verify',
+  ]);
+  return crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, key, compact, signed);
 }
 
 function selectedType(): KeyTypeName {
   const type = typeSelect.value;
   if (!keyTypeNames.includes(type)) throw new Error(`The demo offers no key type ${type}`);
   return type as KeyTypeName; // `as`: checked against keyTypeNames above
+}
+
+function labelOption(): { label?: string } {
+  const label = labelInput.value;
+  return label === '' ? {} : { label };
 }
 
 const vault = await Vault.open().catch((error: unknown) => {
@@ -116,8 +176,11 @@ const keys = vault.scope(SCOPE);
 element('scope', HTMLElement).textContent = SCOPE;
 element('generate', HTMLElement).onclick = () =>
   run(async () => {
-    const label = labelInput.value;
-    await keys.generate(selectedType(), label === '' ? {} : { label });
+    await keys.generate(selectedType(), labelOption()); // first: a passkey prompt starts inside the click
+  });
+element('add', HTMLElement).onclick = () =>
+  run(async () => {
+    await keys.add('passkey', labelOption()); // first: its prompt starts inside the click
   });
 element('wipe', HTMLElement).onclick = () =>
   run(async () => {
