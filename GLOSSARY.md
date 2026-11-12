@@ -17,8 +17,12 @@ A key whose private key the vault generates and keeps encrypted in its own stora
 _Avoid_: local key, software key, stored key
 
 **Passkey key**:
-A key whose private key stays in a passkey authenticator; the vault holds only its public information. It lives in a scope and signs, like any other key.
+A key whose private key stays in a passkey authenticator; the vault holds only its public information. It belongs to the one scope it was created in and signs, like any other key. A vault that has never seen it, such as one on a fresh device, learns it by adding it.
 _Avoid_: global key; "passkey" alone when the key is meant
+
+**Adding a key**:
+Recording in a scope a passkey key the vault has not seen: the user presents the passkey, and the vault learns its public information from it. Only a passkey key created in that scope can be added; adding one the scope already holds changes nothing.
+_Avoid_: import, register, discover, recover
 
 **Unlock passkey**:
 The one passkey that unlocks a protected vault. It belongs to the vault as a whole, not to a scope, and it signs nothing.

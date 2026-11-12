@@ -51,6 +51,7 @@ Status: planned · Spec: #- · Tickets: #-
 - passkey key on a fresh device
 - gesture-safe prompts
 - cancelled prompt error
+- demo: create, add and sign with a passkey key
 
 Not included: passkey as vault unlock (S6)
 
