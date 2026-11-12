@@ -1,4 +1,5 @@
 import { equalBytes, type Bytes } from './bytes.ts';
+import type { Changes } from './changes.ts';
 import type { Connection } from './connection.ts';
 import { VaultError } from './errors.ts';
 import { isKeyTypeName, keyTypes, type GeneratedKey, type KeyTypeName } from './key-types.ts';
@@ -60,11 +61,13 @@ export type Signature<T extends KeyTypeName = KeyTypeName> = {
 export class Scope {
   readonly #name: string;
   readonly #connection: Connection;
+  readonly #changes: Changes;
 
   /** @internal Use `vault.scope(name)`. */
-  constructor(name: string, connection: Connection) {
+  constructor(name: string, connection: Connection, changes: Changes) {
     this.#name = name;
     this.#connection = connection;
+    this.#changes = changes;
   }
 
   // A getter, not a field: a writable name would let code holding this Scope retarget it at another scope.
@@ -91,6 +94,7 @@ export class Scope {
       }
     });
     if (!record) throw new VaultError('unavailable', 'The vault kept changing during generate');
+    this.#changes.notify(); // once, after the commit that stored the key: a redone attempt wrote nothing
     return keyInfo(record);
   }
 
@@ -131,6 +135,7 @@ export class Scope {
       return undefined;
     });
     if (otherType !== undefined) throw typeMismatch(id, otherType);
+    this.#changes.notify();
   }
 
   /** The id and type of a `sign` or `delete` argument, which must name a key of this scope. */
