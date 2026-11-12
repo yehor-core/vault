@@ -31,8 +31,7 @@ async function expectKeysInEvery(vaults: Vault[], keys: KeyInfo[], verify: KeyTy
 describe.each(keyTypeCases)('$type', ({ type, verify }) => {
   describe('no lost updates', () => {
     test('a generate held while another context generates in the same scope: both keys are stored, and list and sign in both contexts', async () => {
-      const { contexts } = await openContexts();
-      const [a, b] = contexts;
+      const [a, b] = await openContexts();
       const existing = await a.scope.generate(type); // the vault exists: a first-time race is its own property
       const held = holdGenerate(type);
 
@@ -46,8 +45,7 @@ describe.each(keyTypeCases)('$type', ({ type, verify }) => {
     });
 
     test('a generate held while another context generates in another scope: both keys are stored, and list and sign in both contexts', async () => {
-      const { contexts } = await openContexts();
-      const [a, b] = contexts;
+      const [a, b] = await openContexts();
       const existing = await a.scope.generate(type);
       const held = holdGenerate(type);
 
@@ -61,7 +59,7 @@ describe.each(keyTypeCases)('$type', ({ type, verify }) => {
     });
 
     test('a generate held while another context deletes a key of its scope: the new key is stored and the deleted one is gone, in both contexts', async () => {
-      const { contexts } = await openContexts();
+      const contexts = await openContexts();
       const [a, b] = contexts;
       const kept = await a.scope.generate(type);
       const deleted = await a.scope.generate(type);

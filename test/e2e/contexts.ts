@@ -76,7 +76,12 @@ export async function startGenerate(page: Page): Promise<{ settled: () => Promis
   }, DEMO_SCOPE);
   return {
     settled: () =>
-      page.evaluate(() => (globalThis as unknown as { pendingGenerate: Promise<PageKey> }).pendingGenerate),
+      page.evaluate(() => {
+        const { pendingGenerate } = globalThis as Record<string, unknown>;
+        if (!(pendingGenerate instanceof Promise)) throw new Error('pendingGenerate missing');
+        // `as`: checked to be a promise just above; startGenerate set it to one of a PageKey
+        return pendingGenerate as Promise<PageKey>;
+      }),
   };
 }
 

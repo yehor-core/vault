@@ -3,12 +3,13 @@ import { webcrypto } from 'node:crypto';
 import { generate, holdKeyGeneration, listAndSign, openDemo, startGenerate, type PageKey } from './contexts.ts';
 
 // Several tabs on one vault (D-43): two pages of one browser context share its IndexedDB, as two tabs do.
-// One interleaving per property; the unit tests in concurrency.test.ts run the others.
+// One interleaving per property; the unit tests in concurrency.test.ts run the others. One key type: the write
+// path never names a type, and the unit tests run every registered one.
 
 const message = 'message to sign';
 
 /** Ed25519 verification in Node, independent of Vault and of the page. */
-async function verifies(publicKey: number[], signature: number[]): Promise<boolean> {
+async function verifies(publicKey: number[], signature: number[], message: string): Promise<boolean> {
   const key = await webcrypto.subtle.importKey('raw', Uint8Array.from(publicKey), 'Ed25519', false, ['verify']);
   return webcrypto.subtle.verify('Ed25519', key, Uint8Array.from(signature), new TextEncoder().encode(message));
 }
@@ -32,6 +33,6 @@ test('concurrent generates from two tabs each store their key, which lists and s
   for (const page of [a, b]) {
     const listed = await listAndSign(page, message);
     expect(byId(listed)).toEqual(byId([existing, key, other]));
-    for (const { publicKey, signature } of listed) expect(await verifies(publicKey, signature)).toBe(true);
+    for (const { publicKey, signature } of listed) expect(await verifies(publicKey, signature, message)).toBe(true);
   }
 });

@@ -147,17 +147,14 @@ export interface Context {
 }
 
 /** Two contexts on one fresh database, each with its scope TEST_SCOPE; closed and deleted by `cleanup`. */
-export async function openContexts(): Promise<{ contexts: [Context, Context]; name: string }> {
+export async function openContexts(): Promise<[Context, Context]> {
   const { vault, scope, name } = await openVault();
   const other = await Vault.open({ name });
   cleanups.push(async () => other.close());
-  return {
-    contexts: [
-      { vault, scope },
-      { vault: other, scope: other.scope(TEST_SCOPE) },
-    ],
-    name,
-  };
+  return [
+    { vault, scope },
+    { vault: other, scope: other.scope(TEST_SCOPE) },
+  ];
 }
 
 /**
