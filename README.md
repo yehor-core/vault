@@ -23,7 +23,7 @@ npx playwright install --with-deps chromium firefox webkit   # --with-deps insta
 | `npm run lint` | oxlint: the coding-standards rules marked _(oxlint)_ (`.oxlintrc.json`) |
 | `npm run format:check` | Prettier over the whole repo; the pre-commit hook formats only staged files, so CI runs this to catch drift elsewhere |
 | `npm run check:casts` | Checks that every type assertion (`as`, not `as const`) in `src/` and `demo/` has a comment holding `` `as`: `` that names the check making it safe |
-| `npm run check:refs` | Checks that every test cited in `DESIGN.md` and `README.md` (`storage › …`) still exists |
+| `npm run check:refs` | Checks that every test (`storage › …`) and every code name (`src/scope.ts` `#commitKeyRecord`) cited in `DESIGN.md` and `README.md` still exists, and that every "not tested" mark names its ticket (`#NN`) or says "not protected" |
 | `npm run check:decisions` | Checks that no past decision in `docs/DECISIONS.md` was rewritten since the merge-base with `origin/main`: it only gains notes naming a new decision |
 | `npm run test:unit` | Vitest Browser Mode in real Chromium, Firefox and WebKit (`test/unit`) |
 | `npm run test:e2e` | Playwright against the demo page in Chromium, Firefox and WebKit (`test/e2e`); starts its own server on :5174 |
