@@ -30,7 +30,7 @@ Where a skill would write an ADR to `docs/adr/`, append an entry to `docs/DECISI
 
 - Use the next free ID (`D-NN`) and the existing format: decision, alternatives, why, what we give up.
 - Start the entry with one short sentence that names the outcome and has no full stop inside it (so no file names): the list command above prints exactly that sentence.
-- When it rests on an external fact (an audit, a release, a browser behaviour), name where that fact is recorded, so a reader can check it.
+- When it rests on an external fact (an audit, a release, a browser behaviour), name where that fact is recorded, so a reader can check it. Facts that several decisions rest on go to `docs/research/<topic>.md`, one section per question, each fact with its primary source and fetch date; the decision cites the section (`docs/research/webauthn-passkey-keys.md §10`).
 - If it answers an item under "## Decisions required by the task", put the ID next to that item.
 - If it constrains a later slice in `docs/ROADMAP.md`, end the entry with `[constrains S<N>]` and say how.
 - Never rewrite a past decision. Add a new entry and mark the old one at its end: `[Superseded by D-NN.]` or `[Updated by D-NN: …]`. `npm run check:decisions` enforces it. A detail of how a ticket implements a decision belongs in `DESIGN.md`, not in the decision.

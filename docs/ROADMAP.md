@@ -45,12 +45,13 @@ Status: done · Spec: #51 · Tickets: #52, #53, #54, #55
 Not included: protection change across tabs (S6)
 
 ## S5: Passkey keys
-Status: planned · Spec: #- · Tickets: #-
+Status: in progress · Spec: #64 · Tickets: #65, #66, #67, #68, #69, #70
 - several passkey keys, user verification required
 - sign with a passkey key
 - passkey key on a fresh device
 - gesture-safe prompts
 - cancelled prompt error
+- demo: create, add and sign with a passkey key
 
 Not included: passkey as vault unlock (S6)
 
