@@ -3,6 +3,7 @@ import { Vault } from '../../src/index.ts';
 import { keyAad, keyId, parseHeader, parseKeyRecord } from '../../src/records.ts';
 import {
   cleanup,
+  deleteHeader,
   done,
   expectVaultError,
   keyRef,
@@ -13,6 +14,7 @@ import {
   readKey,
   replaceKey,
   writeHeader,
+  writeMetaRecord,
 } from './helpers.ts';
 
 afterEach(async () => {
@@ -344,5 +346,87 @@ describe('strict parsing', () => {
     await replaceKey(name, scope.name, record.id, record);
     await writeHeader(name, { ...header, extra: 1 });
     await expectVaultError(scope.list(), 'corrupted');
+  });
+});
+
+// The key only gets a vault written; which type it is doesn't matter to these checks.
+describe('foreign records', () => {
+  const message = new TextEncoder().encode('message');
+
+  // Vault writes only 'header' into meta: anything else is planted, or a format this build doesn't know.
+  test.each([
+    { header: true, keys: true },
+    { header: true, keys: false },
+    { header: false, keys: true },
+    { header: false, keys: false },
+  ])(
+    'a record in meta other than the header makes list, generate and sign fail with corrupted, naming it: header $header, keys $keys',
+    async ({ header, keys }) => {
+      const { scope, name } = await openVault();
+      const key = await scope.generate('ed25519');
+      if (!keys) await rawRun(name, ['keys'], (tx) => void tx.objectStore('keys').clear());
+      if (!header) await deleteHeader(name);
+      await writeMetaRecord(name, 'header2', { v: 1 });
+
+      for (const call of [() => scope.list(), () => scope.generate('ed25519'), () => scope.sign(key, message)]) {
+        const error = await expectVaultError(call(), 'corrupted');
+        expect(error.message).toBe('Corrupted storage: meta: unexpected record "header2"');
+      }
+    },
+  );
+
+  // Each kind of IndexedDB key is named unambiguously: 7 and '7' differ, and bytes don't read as [object ArrayBuffer].
+  const keyNames: [key: IDBValidKey, named: string][] = [
+    ['7', '"7"'],
+    [7, '7'],
+    [new Date(0), 'Date 1970-01-01T00:00:00.000Z'],
+    [Uint8Array.of(1, 255).buffer, 'bytes 01ff'],
+    [['a', 7, ['b']], '["a", 7, ["b"]]'],
+  ];
+  test.each(keyNames)('a foreign record in meta is named by its key, with the key’s type: %s', async (key, named) => {
+    const { scope, name } = await openVault();
+    await scope.generate('ed25519');
+    await writeMetaRecord(name, key, { v: 1 });
+    const error = await expectVaultError(scope.list(), 'corrupted');
+    expect(error.message).toBe(`Corrupted storage: meta: unexpected record ${named}`);
+  });
+
+  test('wipe recovers a vault with a foreign record in meta; the next generate starts a new vault', async () => {
+    const { vault, scope, name } = await openVault();
+    await scope.generate('ed25519');
+    const oldHeader = await readHeader(name);
+    await writeMetaRecord(name, 'extra', { v: 1 });
+    await expectVaultError(scope.list(), 'corrupted');
+
+    await vault.wipe();
+
+    expect(await scope.list()).toEqual([]);
+    const fresh = await scope.generate('ed25519');
+    expect(await scope.list()).toEqual([fresh]);
+    expect((await readHeader(name)).wrappingPublicKey).not.toEqual(oldHeader.wrappingPublicKey);
+  });
+
+  // Never read, so it can't mislead Vault; rejecting it would leave a vault that wipe can't recover.
+  test('an object store that is not Vault’s is ignored: open, list, generate, sign and wipe work as before', async () => {
+    const { vault, scope } = await openVault({
+      // At Vault's version, with Vault's stores and one more holding a record, as another library could create it.
+      // The schema is copied from src/db.ts: if Vault's stores change, this must follow, or Vault rejects them.
+      async before(name) {
+        const request = indexedDB.open(name, 1);
+        request.onupgradeneeded = () => {
+          request.result.createObjectStore('meta');
+          request.result.createObjectStore('keys', { keyPath: ['scope', 'id'] });
+          request.result.createObjectStore('other').add({ v: 1 }, 'header');
+        };
+        (await done(request)).close();
+      },
+    });
+
+    expect(await scope.list()).toEqual([]);
+    const key = await scope.generate('ed25519');
+    expect(await scope.list()).toEqual([key]);
+    expect((await scope.sign(key, message)).type).toBe('ed25519');
+    await vault.wipe();
+    expect(await scope.list()).toEqual([]);
   });
 });

@@ -122,9 +122,15 @@ const cleanups: (() => Promise<void>)[] = [];
 /** The scope `openVault` hands out. Not 'default', so code still bound to S1's fixed scope fails the tests. */
 export const TEST_SCOPE = 'test';
 
-/** A vault on a fresh, uniquely named database, and its scope TEST_SCOPE; closed and deleted by `cleanup`. */
-export async function openVault(): Promise<{ vault: Vault; scope: Scope; name: string }> {
+/**
+ * A vault on a fresh, uniquely named database, and its scope TEST_SCOPE; closed and deleted by `cleanup`.
+ * `before` gets the database name before Vault first opens it.
+ */
+export async function openVault(
+  options: { before?: (name: string) => Promise<void> } = {},
+): Promise<{ vault: Vault; scope: Scope; name: string }> {
   const name = `test-${crypto.randomUUID()}`;
+  await options.before?.(name);
   const vault = await Vault.open({ name });
   cleanups.push(async () => {
     vault.close();
@@ -178,6 +184,9 @@ export async function rawRun<T>(
 export const readHeader = (name: string) => rawRun<any>(name, ['meta'], (tx) => tx.objectStore('meta').get('header'));
 export const writeHeader = (name: string, header: unknown) =>
   rawRun(name, ['meta'], (tx) => void tx.objectStore('meta').put(header, 'header'));
+/** Stores `value` in meta under `key`: a record next to the header, which Vault never writes. */
+export const writeMetaRecord = (name: string, key: IDBValidKey, value: unknown) =>
+  rawRun(name, ['meta'], (tx) => void tx.objectStore('meta').put(value, key));
 export const deleteHeader = (name: string) =>
   rawRun(name, ['meta'], (tx) => void tx.objectStore('meta').delete('header'));
 export const readKey = (name: string, scope: string, id: string) =>
