@@ -928,6 +928,7 @@ describe('passkey records', () => {
       `${field} removed`,
       (r) => without(r, field),
     ]),
+    ['label as a number', (r) => ({ ...r, label: 1 })],
     ['an extra field', (r) => ({ ...r, extra: 1 })],
     [
       'a sealed part added',

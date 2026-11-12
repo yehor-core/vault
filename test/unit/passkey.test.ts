@@ -102,7 +102,7 @@ const replaceField = (object: object, field: string, value: unknown) =>
 
 let authenticator: VirtualAuthenticator;
 
-// Chromium only: the CDP virtual authenticator exists nowhere else (D-62); e2e covers Firefox and WebKit.
+// Chromium only: the CDP virtual authenticator exists nowhere else (D-62); e2e in Firefox and WebKit comes with #69.
 describe.runIf(hasVirtualAuthenticator)('passkey keys', () => {
   beforeEach(async () => {
     authenticator = await addVirtualAuthenticator();
@@ -115,7 +115,7 @@ describe.runIf(hasVirtualAuthenticator)('passkey keys', () => {
   });
 
   describe('generate', () => {
-    test('generate starts the passkey prompt before its first await, with the options D-50 fixes', async () => {
+    test('generate starts the passkey prompt before its first await, with the creation options Vault fixes', async () => {
       const { scope } = await openVault();
       const create = vi.spyOn(navigator.credentials, 'create');
 

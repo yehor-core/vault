@@ -203,7 +203,7 @@ export class Scope {
       const generated = await generate();
       try {
         const record = await this.#prepareKeyRecord(type, label, header, generated);
-        const written = await this.#commitKeyRecord(record, header, isNew, false);
+        const written = await this.#commitKeyRecord(record, header, isNew);
         return written ? record : undefined;
       } finally {
         generated.erase(); // stored, or abandoned: a retry generates a fresh key
@@ -212,23 +212,20 @@ export class Scope {
   }
 
   /**
-   * A key whose record doesn't depend on the header (D-61): generated once, behind a prompt, and added to the vault
-   * as it is, creating the header when the vault is empty. Only the write is redone, when the vault was emptied
-   * after its header was read; no wiped key comes back, as this one is new.
+   * A key whose record doesn't depend on the header (D-61): generated once, behind a prompt, and added in one
+   * transaction to the vault as it is then, never redone. A fresh header is made beforehand, used only if the
+   * vault is empty by then. No wiped key comes back, as this one is new.
    */
-  async #storeAsIs(
-    type: KeyTypeName,
-    label: string | undefined,
-    pending: Promise<NewKey>,
-  ): Promise<KeyRecord | undefined> {
+  async #storeAsIs(type: KeyTypeName, label: string | undefined, pending: Promise<NewKey>): Promise<KeyRecord> {
     const generated = await pending;
     try {
-      return await untilUnchanged(MAX_ATTEMPTS, async () => {
-        const { header, isNew } = await this.#headerForWrite();
-        const record = await this.#prepareKeyRecord(type, label, header, generated);
-        const written = await this.#commitKeyRecord(record, header, isNew, true);
-        return written ? record : undefined;
+      const header = await createHeader();
+      const record = await this.#prepareKeyRecord(type, label, header, generated);
+      await this.#connection.transact([META_STORE, KEYS_STORE], 'readwrite', async (tx) => {
+        if (!(await readHeader(tx))) addHeader(tx, header);
+        addKeyRecord(tx, record);
       });
+      return record;
     } finally {
       generated.erase();
     }
@@ -257,18 +254,16 @@ export class Scope {
   }
 
   /**
-   * Crypto is done; the transaction only checks that the header is still the one we sealed to, then writes.
-   * False means the vault was wiped or deleted, or its header replaced, since we read it. A record written
-   * `asIs` doesn't depend on the header: it is added to whichever vault is there, and false means only that
-   * the vault was emptied and `header` is not a new one to create it with.
+   * Crypto is done; the transaction only checks that the header is still the one we sealed to, then
+   * writes. False means the vault was wiped or deleted, or its header replaced, since we read it.
    */
-  async #commitKeyRecord(record: KeyRecord, header: HeaderRecord, isNew: boolean, asIs: boolean): Promise<boolean> {
+  async #commitKeyRecord(record: KeyRecord, header: HeaderRecord, isNew: boolean): Promise<boolean> {
     return this.#connection.transact([META_STORE, KEYS_STORE], 'readwrite', async (tx) => {
       const current = await readHeader(tx);
       if (!current) {
         if (!isNew) return false; // wiped or deleted since we read it
         addHeader(tx, header);
-      } else if (!asIs && !equalBytes(current.wrappingPublicKey, header.wrappingPublicKey)) {
+      } else if (!equalBytes(current.wrappingPublicKey, header.wrappingPublicKey)) {
         return false; // replaced since we read it (or another first write won)
       }
       addKeyRecord(tx, record);
