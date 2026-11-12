@@ -47,8 +47,8 @@ describe.each(keyTypeCases)('$type', ({ type }) => {
   test('a write that aborts or fails calls no listener', async () => {
     const [a, b] = await openContexts();
     // The same key pair twice gives the same id: the second add aborts the transaction at commit.
-    const pair = await keyTypes[type].generate();
-    vi.spyOn(keyTypes[type], 'generate').mockResolvedValue(pair);
+    const pair = await keyTypes[type].scheme.generate();
+    vi.spyOn(keyTypes[type].scheme, 'generate').mockResolvedValue(pair);
     const [inA, inB] = [vi.fn(), vi.fn()];
     a.vault.onChange(inA);
     b.vault.onChange(inB);

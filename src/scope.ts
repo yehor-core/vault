@@ -2,12 +2,10 @@ import { equalBytes, type Bytes } from './bytes.ts';
 import type { Changes } from './changes.ts';
 import type { Connection } from './connection.ts';
 import { VaultError } from './errors.ts';
-import { isKeyTypeName, keyTypes, type GeneratedKey, type KeyTypeName } from './key-types.ts';
+import { isKeyTypeName, keyType, type KeyTypeName, type NewKey, type SignatureOf } from './key-types.ts';
 import {
-  corrupted,
   FORMAT_VERSION,
   isLabel,
-  keyAad,
   keyId,
   MAX_LABEL_LENGTH,
   parseKeyRecord,
@@ -15,7 +13,7 @@ import {
   type KeyFields,
   type KeyRecord,
 } from './records.ts';
-import { generateWrappingKey, seal, unseal } from './seal.ts';
+import { generateWrappingKey } from './seal.ts';
 import {
   addHeader,
   addKeyRecord,
@@ -49,10 +47,13 @@ export interface GenerateOptions {
   readonly label?: string;
 }
 
-/** One member per key type; the bytes are in that type's signature encoding (DESIGN.md §7.5). */
+/** One member per key type, in that type's signature encoding (DESIGN.md §7.5). */
 export type Signature<T extends KeyTypeName = KeyTypeName> = {
-  [U in T]: { readonly type: U; readonly bytes: Uint8Array<ArrayBuffer> };
+  [U in T]: Simplify<{ readonly type: U } & SignatureOf<U>>;
 }[T];
+
+/** One object type instead of an intersection, so editors show a signature's fields. */
+type Simplify<T> = { [K in keyof T]: T[K] };
 
 /**
  * A named group of keys in a vault, from `vault.scope(name)`. It holds nothing but its name and has no
@@ -119,10 +120,9 @@ export class Scope {
     const message: Bytes = new Uint8Array(data); // the caller may change `data` while we await
     const { header, record } = await this.#loadKey(id);
     if (record.type !== type) throw typeMismatch(id, record.type);
-    const signature = await signWithRecord(header, record, message);
-    await assertSignatureMatches(record, signature, message);
-    // `as`: the runtime check above makes record.type K['type'], which TypeScript can't follow.
-    return { type: record.type, bytes: signature } as Signature<K['type']>;
+    const signature = await keyType(record.type).sign(record, header, message);
+    // `as`: the runtime check above makes record.type K['type'], and its key type returned its own member.
+    return { type: record.type, ...signature } as Signature<K['type']>;
   }
 
   /** Deletes `key`, read like `sign` reads it. Deleting a missing key is a no-op. */
@@ -171,12 +171,12 @@ export class Scope {
     return { header: created, isNew: true };
   }
 
-  /** The crypto after generation: derive the id, seal. Outside any transaction: crypto would end it. */
+  /** The crypto after generation: derive the id, then the key type's part. Outside any transaction: crypto would end it. */
   async #prepareKeyRecord(
     type: KeyTypeName,
     label: string | undefined,
     header: HeaderRecord,
-    generated: GeneratedKey,
+    generated: NewKey,
   ): Promise<KeyRecord> {
     const scope = this.#name;
     const id = await keyId(scope, type, generated.publicKey);
@@ -189,8 +189,8 @@ export class Scope {
       createdAt: Date.now(),
       ...(label !== undefined && { label }), // never `label: undefined`: it would be stored
     };
-    const sealed = await sealFields(header, fields, generated.seal);
-    return { ...fields, sealed };
+    const part = await generated.part(fields, header);
+    return { ...fields, ...part };
   }
 
   /**
@@ -212,33 +212,12 @@ export class Scope {
   }
 }
 
-async function generateKey(type: KeyTypeName): Promise<GeneratedKey> {
-  return keyTypes[type].generate().catch((cause: unknown) => {
-    throw new VaultError('unavailable', 'The browser failed to generate a key', { cause });
-  });
-}
-
-async function sealFields(header: HeaderRecord, fields: KeyFields, encrypt: Parameters<typeof seal>[2]) {
-  return seal(header.wrappingPublicKey, keyAad(fields), encrypt).catch((cause: unknown) => {
-    // The only stored input is the wrapping public key; a fresh one always imports.
-    throw cause instanceof DOMException && cause.name === 'DataError' ? corrupted('wrapping public key', cause) : cause;
-  });
-}
-
-/** Decrypts the key and signs; any failure means the stored key is not what Vault sealed. */
-async function signWithRecord(header: HeaderRecord, record: KeyRecord, message: Bytes): Promise<Bytes> {
-  try {
-    const cipher = await unseal(header.protection.privateKey, header.wrappingPublicKey, record.sealed, keyAad(record));
-    return await keyTypes[record.type].sign(record.sealed.ciphertext, cipher, message); // await: so catch sees it
-  } catch (cause) {
-    throw corrupted(`key ${record.id} does not decrypt`, cause);
-  }
-}
-
-// Anyone can seal a key of their own to the public wrapping key; it decrypts fine, and only this check catches it.
-async function assertSignatureMatches(record: KeyRecord, signature: Bytes, message: Bytes): Promise<void> {
-  const valid = await keyTypes[record.type].verify(record.publicKey, signature, message).catch(() => false);
-  if (!valid) throw corrupted(`key ${record.id} does not match its public key`);
+async function generateKey(type: KeyTypeName): Promise<NewKey> {
+  return keyType(type)
+    .generate()
+    .catch((cause: unknown) => {
+      throw new VaultError('unavailable', 'The browser failed to generate a key', { cause });
+    });
 }
 
 /** Optimistic write: runs `attempt` up to `times` times until it returns a value (undefined = vault changed). */

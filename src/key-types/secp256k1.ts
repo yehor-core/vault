@@ -1,6 +1,6 @@
 import { secp256k1 as curve } from '@noble/curves/secp256k1.js';
 import type { Bytes } from '../bytes.ts';
-import type { KeyType } from '../key-types.ts';
+import { sealedKeyType } from './sealed.ts';
 
 const SCALAR_LENGTH = 32;
 // 48 bytes reduced mod n: the bias of the scalar is negligible (FIPS 186-5 A.2.1). noble requires this length.
@@ -17,7 +17,7 @@ const VERIFY_OPTIONS = { prehash: true, lowS: true, format: 'compact' } as const
  * @noble/curves. The public key is a 33-byte compressed SEC1 point; the sealed plaintext is the raw 32-byte
  * scalar. The scalar exists as JS bytes during generate and sign; Vault zeroes the buffers it owns.
  */
-export const secp256k1: KeyType = {
+export const secp256k1 = sealedKeyType({
   isPublicKey: (bytes) => curve.utils.isValidPublicKey(bytes, true),
 
   async generate() {
@@ -51,7 +51,7 @@ export const secp256k1: KeyType = {
   async verify(publicKey, signature, data) {
     return curve.verify(signature, data, publicKey, VERIFY_OPTIONS);
   },
-};
+});
 
 function randomScalar() {
   const seed = crypto.getRandomValues(new Uint8Array(SEED_LENGTH));

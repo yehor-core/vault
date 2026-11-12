@@ -1,5 +1,6 @@
 import { VaultError } from './errors.ts';
-import { corrupted, FORMAT_VERSION } from './records.ts';
+import { corrupted } from './readers.ts';
+import { FORMAT_VERSION } from './records.ts';
 
 export type Store = 'meta' | 'keys';
 

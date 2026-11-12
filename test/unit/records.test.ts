@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { Vault } from '../../src/index.ts';
-import { keyAad, keyId, parseHeader, parseKeyRecord } from '../../src/records.ts';
+import { keyAad } from '../../src/key-types/sealed.ts';
+import { keyId, parseHeader, parseKeyRecord } from '../../src/records.ts';
 import {
   cleanup,
   deleteHeader,

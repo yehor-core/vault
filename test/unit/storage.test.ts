@@ -2,7 +2,8 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import { base64url, encode, type Bytes } from '../../src/bytes.ts';
 import { keyTypes, type KeyTypeName } from '../../src/key-types.ts';
 import { Vault, type VaultErrorCode } from '../../src/index.ts';
-import { keyAad, keyId, type KeyFields } from '../../src/records.ts';
+import { keyAad } from '../../src/key-types/sealed.ts';
+import { keyId, type KeyFields } from '../../src/records.ts';
 import { generateWrappingKey, importPublicKey, seal, unseal, type Cipher } from '../../src/seal.ts';
 import {
   cleanup,
@@ -69,7 +70,7 @@ async function plantKey(
   const sealed = await seal(
     header.wrappingPublicKey,
     keyAad(fields),
-    encrypt ?? (await keyTypes[type].generate()).seal,
+    encrypt ?? (await keyTypes[type].scheme.generate()).seal,
   );
   await rawRun(name, ['keys'], (tx) => void tx.objectStore('keys').put({ ...fields, sealed }));
   return fields.id;
@@ -522,7 +523,7 @@ describe.each(keyTypeCases)('$type', ({ type, signatureLength, invalidPublicKeys
 
     // Wraps each generated key so the test sees when its secrets are erased. `during` runs after generation.
     function watchErase(during: () => Promise<void> = async () => {}): { erased: number }[] {
-      const keyType = keyTypes[type];
+      const keyType = keyTypes[type].scheme;
       const generate = keyType.generate.bind(keyType);
       const pairs: { erased: number }[] = [];
       vi.spyOn(keyType, 'generate').mockImplementation(async () => {
@@ -798,12 +799,14 @@ describe.each(keyTypeCases)('$type', ({ type, signatureLength, invalidPublicKeys
       const [header, record] = [await readHeader(name), await readKey(name, scope.name, key.id)];
 
       // Needs no secret: the wrapping key is public and the associated data is the record's own fields.
-      const attacker = await keyTypes[type].generate();
+      const attacker = await keyTypes[type].scheme.generate();
       const sealed = await seal(header.wrappingPublicKey, keyAad(record), attacker.seal);
       await replaceKey(name, scope.name, key.id, { ...record, sealed });
 
       const cipher = await unseal(header.protection.privateKey, header.wrappingPublicKey, sealed, keyAad(record));
-      await expect(keyTypes[type].sign(sealed.ciphertext, cipher, message)).resolves.toHaveLength(signatureLength);
+      await expect(keyTypes[type].scheme.sign(sealed.ciphertext, cipher, message)).resolves.toHaveLength(
+        signatureLength,
+      );
       await expectVaultError(scope.sign(key, message), 'corrupted');
     });
 

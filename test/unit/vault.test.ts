@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, expectTypeOf, test, vi } from 'vitest';
-import { keyTypes } from '../../src/key-types.ts';
-import { Vault, type KeyInfo, type Signature } from '../../src/index.ts';
+import { keyTypes, type AddableKeyTypeName } from '../../src/key-types.ts';
+import { Vault, type KeyInfo, type Scope, type Signature } from '../../src/index.ts';
 import {
   cleanup,
   deleteHeader,
@@ -178,7 +178,7 @@ describe.each(keyTypeCases)('$type', ({ type, publicKeyLength, signatureLength, 
 
     test('a malformed label or options argument is a TypeError, thrown before anything is generated or written', async () => {
       const { scope, name } = await openVault();
-      const generate = vi.spyOn(keyTypes[type], 'generate');
+      const generate = vi.spyOn(keyTypes[type].scheme, 'generate');
       const malformed = ['', 'x'.repeat(257), '\uD800', 'a\uDC00b', 1, null, {}, new String('label')];
       for (const label of malformed) {
         await expect(scope.generate(type, { label: label as never })).rejects.toThrow(TypeError);
@@ -232,7 +232,7 @@ describe.each(keyTypeCases)('$type', ({ type, publicKeyLength, signatureLength, 
       const { vault } = await openVault();
       const [a, b] = [vault.scope('app-a'), vault.scope('app-b')];
       const key = await a.generate(type);
-      const sign = vi.spyOn(keyTypes[type], 'sign');
+      const sign = vi.spyOn(keyTypes[type].scheme, 'sign');
 
       await expect(b.sign(key, message)).rejects.toThrow(TypeError);
       await expect(b.delete(key)).rejects.toThrow(TypeError);
@@ -339,8 +339,8 @@ describe.each(keyTypeCases)('$type', ({ type, publicKeyLength, signatureLength, 
       const { scope, name } = await openVault();
       await scope.generate(type);
       const oldHeader = await readHeader(name);
-      const generate = keyTypes[type].generate;
-      const spy = vi.spyOn(keyTypes[type], 'generate').mockImplementationOnce(async () => {
+      const generate = keyTypes[type].scheme.generate;
+      const spy = vi.spyOn(keyTypes[type].scheme, 'generate').mockImplementationOnce(async () => {
         const generated = await generate();
         return {
           ...generated,
@@ -407,8 +407,8 @@ describe.each(keyTypeCases)('$type', ({ type, publicKeyLength, signatureLength, 
       const { scope } = await openVault();
       // The same key pair twice gives the same id, so the second add fails asynchronously with ConstraintError.
       // The second seal runs after the first erase; the write fails on the id whatever it seals.
-      const pair = await keyTypes[type].generate();
-      vi.spyOn(keyTypes[type], 'generate').mockResolvedValue(pair);
+      const pair = await keyTypes[type].scheme.generate();
+      vi.spyOn(keyTypes[type].scheme, 'generate').mockResolvedValue(pair);
       const first = await scope.generate(type);
 
       const error = await expectVaultError(scope.generate(type), 'unavailable');
@@ -448,7 +448,7 @@ describe.each(keyTypeCases)('$type', ({ type, publicKeyLength, signatureLength, 
 
     test('a key generation that keeps failing is retryable unavailable, and stores nothing', async () => {
       const { scope, name } = await openVault();
-      vi.spyOn(keyTypes[type], 'generate').mockRejectedValue(new DOMException('simulated', 'OperationError'));
+      vi.spyOn(keyTypes[type].scheme, 'generate').mockRejectedValue(new DOMException('simulated', 'OperationError'));
 
       const error = await expectVaultError(scope.generate(type), 'unavailable');
       expect(error.cause).toMatchObject({ name: 'OperationError' });
@@ -482,6 +482,12 @@ test('the type of a signature follows the type of the key passed to sign', async
   expectTypeOf(k1Signature).toEqualTypeOf<Signature<'secp256k1'>>();
   expectTypeOf(anySignature).toEqualTypeOf<Signature>();
   expect([edSignature.type, k1Signature.type, anySignature.type]).toEqual(['ed25519', 'secp256k1', 'secp256k1']);
+});
+
+// Adding an existing key exists only for key types that can (D-55); no registered type can yet.
+test('no registered key type can add an existing key, so a scope has no add operation', () => {
+  expectTypeOf<AddableKeyTypeName>().toBeNever();
+  expectTypeOf<Scope>().not.toHaveProperty('add');
 });
 
 // secp256k1's own behaviour. 64 signatures: without low-S, each is high with probability 1/2.
