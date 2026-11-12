@@ -10,6 +10,7 @@ import {
   readHeader,
   TEST_SCOPE,
   type KeyTypeCase,
+  type SealedKeyTypeName,
 } from './helpers.ts';
 
 // Two contexts are two Vault.open() of one database in one page: each has its own connection, as two tabs do.
@@ -26,7 +27,11 @@ const OTHER_SCOPE = 'other';
 const byId = (keys: KeyInfo[]) => keys.toSorted((a, b) => (a.id < b.id ? -1 : 1));
 
 /** In every vault, each scope of `keys` lists exactly its keys, and every key signs with a signature that verifies. */
-async function expectKeysInEvery(vaults: Vault[], keys: KeyInfo[], verify: KeyTypeCase['verify']): Promise<void> {
+async function expectKeysInEvery(
+  vaults: Vault[],
+  keys: KeyInfo<SealedKeyTypeName>[],
+  verify: KeyTypeCase['verify'],
+): Promise<void> {
   for (const vault of vaults) {
     for (const scope of new Set(keys.map((key) => key.scope))) {
       expect(byId(await vault.scope(scope).list())).toEqual(byId(keys.filter((key) => key.scope === scope)));

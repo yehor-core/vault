@@ -2,7 +2,7 @@
 
 A browser-native private-key store on top of IndexedDB. Design: [DESIGN.md](DESIGN.md).
 
-> Status: S5 in progress. Unprotected vault with ed25519 and secp256k1 keys in named scopes: generate, list, sign, delete per scope; wipe for the whole vault. Keys are encrypted at rest in a versioned storage format, records are validated and fail closed, and errors are classified. Keys can carry a label, fixed at generate. Several tabs can use one vault at once: concurrent writes lose no update, first-time setup converges, a stale tab can't undo a wipe, and `vault.onChange` tells every tab that the vault may have changed. Not built yet: passkey keys, passkey protection.
+> Status: S5 in progress. Unprotected vault with ed25519, secp256k1 and passkey keys in named scopes: generate, list, sign, delete per scope; wipe for the whole vault. Keys are encrypted at rest in a versioned storage format, records are validated and fail closed, and errors are classified. Keys can carry a label, fixed at generate. Several tabs can use one vault at once: concurrent writes lose no update, first-time setup converges, a stale tab can't undo a wipe, and `vault.onChange` tells every tab that the vault may have changed. A passkey key is created, listed, signed with and deleted through the same calls, each prompt started before any await; adding an existing passkey on a fresh device is not built yet. Not built yet: passkey protection.
 
 ## Setup
 
@@ -51,7 +51,7 @@ const k1 = await keys.generate('secp256k1');      // ECDSA over SHA-256, low-S, 
 | Firefox | 157 | ✓ | ✓ | not built yet |
 | WebKit | 27.2 | ✓ | ✓ | not built yet |
 
-Needs WebCrypto Ed25519, ECDH P-256, HKDF and AES-GCM, IndexedDB and `Uint8Array.prototype.toBase64` (ES2026), in a secure context. secp256k1, and ed25519 verification, run on `@noble/curves` 2.3.0, pinned exactly (DESIGN.md §3.3). WebKit (Playwright, Linux) has four quirks that shape the design; see DESIGN.md §8:
+Needs WebCrypto Ed25519, ECDH P-256, HKDF and AES-GCM, IndexedDB and `Uint8Array.prototype.toBase64` (ES2026), in a secure context. secp256k1, ed25519 verification and passkey assertion checks run on `@noble/curves` 2.3.0, and the SHA-256 computed before a passkey prompt on `@noble/hashes` 2.3.0, both pinned exactly (DESIGN.md §3.3). WebKit (Playwright, Linux) has four quirks that shape the design; see DESIGN.md §8:
 - It loses stored X25519 keys.
 - Its point import accepts off-curve points.
 - Its Ed25519 key generation fails about 0.7% of the time (Vault retries it).

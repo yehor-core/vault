@@ -40,6 +40,9 @@ export interface SealedSignature {
 
 export type SealedKeyType = KeyType<SealedPart, SealedSignature> & {
   readonly canAdd: false;
+  readonly prompts: false;
+  /** Nothing: the public information of a sealed key is the fields every key has. */
+  info(part: SealedPart): Record<never, never>;
   readonly scheme: SealedScheme;
 };
 
@@ -51,20 +54,25 @@ export function sealedKeyType(scheme: SealedScheme): SealedKeyType {
   return {
     scheme,
     canAdd: false,
+    prompts: false,
     fields: ['sealed'],
     parse: (record) => ({ sealed: parseSealed(record.sealed) }),
     isPublicKey: (bytes) => scheme.isPublicKey(bytes),
+    identity: (record) => record.publicKey,
+    info: () => ({}),
 
     async generate() {
       const generated = await scheme.generate();
       return {
         publicKey: generated.publicKey,
+        identity: generated.publicKey,
         part: async (fields, header) => ({ sealed: await sealFields(header, fields, generated) }),
         erase: () => generated.erase(),
       };
     },
 
-    async sign(record, header, data) {
+    async sign(_key, data, load) {
+      const { record, header } = await load();
       const bytes = await signWithRecord(scheme, record, header, data);
       // Anyone can seal a key of their own to the public wrapping key; it decrypts fine, and only this check catches it.
       const valid = await scheme.verify(record.publicKey, bytes, data).catch(() => false);

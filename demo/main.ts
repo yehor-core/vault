@@ -76,6 +76,7 @@ function button(label: string, action: () => Promise<void>): HTMLButtonElement {
 async function sign(key: KeyInfo) {
   const message = new TextEncoder().encode(messageInput.value);
   const signature = await keys.sign(key, message);
+  if (signature.type === 'passkey') throw new Error('The demo creates no passkey keys yet, so it shows no assertion');
   const verified = await verify(key, signature.bytes, message);
   output.dataset.type = signature.type;
   output.dataset.signature = hex(signature.bytes);
