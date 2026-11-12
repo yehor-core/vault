@@ -158,7 +158,9 @@ export async function listAndSign(page: Page, message: string): Promise<(PageKey
         const data = new TextEncoder().encode(message);
         return await Promise.all(
           keys.map(async (key) => {
-            const { bytes } = await vault.scope(scope).sign(key, data);
+            const signature = await vault.scope(scope).sign(key, data);
+            if (signature.type === 'passkey') throw new Error(`Key ${key.id} is a passkey key; these tabs make none`);
+            const { bytes } = signature;
             return { id: key.id, publicKey: Array.from(key.publicKey), signature: Array.from(bytes) };
           }),
         );

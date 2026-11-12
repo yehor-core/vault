@@ -1,7 +1,15 @@
 import { afterEach, describe, expect, expectTypeOf, test, vi, type Mock } from 'vitest';
 import type { Scope, Vault } from '../../src/index.ts';
-import { keyTypes } from '../../src/key-types.ts';
-import { cleanup, expectVaultError, holdGenerate, keyRef, keyTypeCases, openContexts, openVault } from './helpers.ts';
+import {
+  cleanup,
+  expectVaultError,
+  holdGenerate,
+  keyRef,
+  keyTypeCases,
+  openContexts,
+  openVault,
+  sealedScheme,
+} from './helpers.ts';
 
 // Change notifications (D-46): two Vault.open() of one database in one page stand for two contexts, and
 // BroadcastChannel delivers between them as it does between tabs.
@@ -47,8 +55,8 @@ describe.each(keyTypeCases)('$type', ({ type }) => {
   test('a write that aborts or fails calls no listener', async () => {
     const [a, b] = await openContexts();
     // The same key pair twice gives the same id: the second add aborts the transaction at commit.
-    const pair = await keyTypes[type].scheme.generate();
-    vi.spyOn(keyTypes[type].scheme, 'generate').mockResolvedValue(pair);
+    const pair = await sealedScheme(type).generate();
+    vi.spyOn(sealedScheme(type), 'generate').mockResolvedValue(pair);
     const [inA, inB] = [vi.fn(), vi.fn()];
     a.vault.onChange(inA);
     b.vault.onChange(inB);

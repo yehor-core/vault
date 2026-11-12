@@ -38,7 +38,7 @@ Checked by `/code-review` against every diff. Rules marked _(oxlint)_ or _(tsc)_
 ## Key types
 
 - The core never names a key type, not even in a comment. Type-specific behaviour lives in a module in `src/key-types/` behind `KeyType` (`src/key-types.ts`) and its registry. `key-types › no core file names a registered key type` enforces it.
-- Every test about keys runs once per registered key type (`describe.each(keyTypeCases)`). Type-specific test inputs live only in `keyTypeCases` in `test/unit/helpers.ts`; a test of one type's own behaviour says so in a comment. Format tests (`records ›`) pin bytes of one type and are exempt. So are type-level tests (`expectTypeOf`), which name each key type explicitly: static narrowing can't iterate the table.
+- Every test about keys runs once per registered sealed key type (`describe.each(keyTypeCases)`). Type-specific test inputs live only in `keyTypeCases` in `test/unit/helpers.ts`; a key type that prompts can't run those tests without an authenticator, so its cases are its own set (`test/unit/passkey.test.ts`, `storage › passkey records`); a test of one type's own behaviour says so in a comment. Format tests (`records ›`) pin bytes of one type and are exempt. So are type-level tests (`expectTypeOf`), which name each key type explicitly: static narrowing can't iterate the table.
 
 ## Errors
 

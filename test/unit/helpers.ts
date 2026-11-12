@@ -2,10 +2,21 @@ import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { expect, vi } from 'vitest';
 import { Vault, VaultError, type KeyInfo, type KeyTypeName, type Scope, type VaultErrorCode } from '../../src/index.ts';
 import { keyTypes } from '../../src/key-types.ts';
+import type { SealedKeyType, SealedScheme } from '../../src/key-types/sealed.ts';
+
+/** The registered key types whose private key Vault generates and stores sealed: they never prompt. */
+export type SealedKeyTypeName = {
+  [T in KeyTypeName]: (typeof keyTypes)[T] extends SealedKeyType ? T : never;
+}[KeyTypeName];
+
+/** The scheme of a sealed key type, for spies on its generate. */
+export function sealedScheme(type: SealedKeyTypeName): SealedScheme {
+  return keyTypes[type].scheme;
+}
 
 /** What the tests know about one key type, independently of Vault's code. */
 export interface KeyTypeCase {
-  readonly type: KeyTypeName;
+  readonly type: SealedKeyTypeName;
   readonly publicKeyLength: number;
   readonly signatureLength: number;
   /** Verifies a signature with code that is not Vault's. */
@@ -39,9 +50,10 @@ export const SECP256K1_G = Uint8Array.fromHex('0279be667ef9dcbbac55a06295ce870b0
 // prettier-ignore
 const SECP256K1_G_UNCOMPRESSED = Uint8Array.fromHex('0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8');
 
-// The only place tests hold type-specific inputs. Typed by the registry: a new key type fails to compile
-// until it has an entry here, and then every per-type test runs for it.
-const keyTypeCaseByName: { [T in KeyTypeName]: KeyTypeCase & { readonly type: T } } = {
+// The only place tests hold type-specific inputs of sealed key types. Typed by the registry: a new sealed key type
+// fails to compile until it has an entry here, and then every per-type test runs for it. Key types that prompt
+// can't run these tests without an authenticator; their cases are their own (`passkey.test.ts`).
+const keyTypeCaseByName: { [T in SealedKeyTypeName]: KeyTypeCase & { readonly type: T } } = {
   ed25519: {
     type: 'ed25519',
     publicKeyLength: 32,
@@ -109,7 +121,7 @@ function bufferBytes(source: BufferSource): Uint8Array {
     : new Uint8Array(source);
 }
 
-/** One case per registered key type: `describe.each(keyTypeCases)`. */
+/** One case per registered sealed key type: `describe.each(keyTypeCases)`. */
 export const keyTypeCases: readonly KeyTypeCase[] = Object.values(keyTypeCaseByName);
 
 /** Date.now() advancing 1 ms per call, so keys never share a creation millisecond. Restored by vi.restoreAllMocks. */
@@ -164,11 +176,12 @@ export async function openContexts(): Promise<[Context, Context]> {
  * generated, then held before it is sealed and written, so another context can write meanwhile. `reached`
  * resolves once the call is held; `release` lets it go on. Later calls pass. Restored by vi.restoreAllMocks.
  */
-export function holdGenerate(type: KeyTypeName): { reached: Promise<void>; release: () => void } {
-  const generate = keyTypes[type].scheme.generate;
+export function holdGenerate(type: SealedKeyTypeName): { reached: Promise<void>; release: () => void } {
+  const scheme = sealedScheme(type);
+  const generate = scheme.generate;
   const reached = Promise.withResolvers<void>();
   const gate = Promise.withResolvers<void>();
-  vi.spyOn(keyTypes[type].scheme, 'generate').mockImplementationOnce(async () => {
+  vi.spyOn(scheme, 'generate').mockImplementationOnce(async () => {
     const generated = await generate();
     reached.resolve();
     await gate.promise;
@@ -178,8 +191,15 @@ export function holdGenerate(type: KeyTypeName): { reached: Promise<void>; relea
 }
 
 /** A KeyInfo naming key `id` of `scope`, for ids no call returned (planted or edited records); Vault reads only id, scope and type. */
-export function keyRef(scope: Scope, id: string, type: KeyTypeName): KeyInfo {
-  return { id, scope: scope.name, type, publicKey: new Uint8Array(), createdAt: new Date(0) };
+export function keyRef<T extends SealedKeyTypeName>(scope: Scope, id: string, type: T): KeyInfo<T> {
+  // `as`: a sealed member of KeyInfo has exactly these fields; TypeScript can't distribute T over the object.
+  return { id, scope: scope.name, type, publicKey: new Uint8Array(), createdAt: new Date(0) } as KeyInfo<T>;
+}
+
+/** `key`, which a test of sealed key types listed, as a sealed key: its signature has `bytes`. */
+export function asSealed(key: KeyInfo): KeyInfo<SealedKeyTypeName> {
+  if (key.type === 'passkey') throw new Error(`Key ${key.id} is not sealed`);
+  return key;
 }
 
 export async function cleanup(): Promise<void> {

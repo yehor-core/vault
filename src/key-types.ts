@@ -1,5 +1,6 @@
 import type { Bytes } from './bytes.ts';
 import { ed25519 } from './key-types/ed25519.ts';
+import { passkey } from './key-types/passkey.ts';
 import { secp256k1 } from './key-types/secp256k1.ts';
 import type { Fields } from './readers.ts';
 import type { HeaderRecord, KeyFields } from './records.ts';
@@ -12,27 +13,55 @@ import type { HeaderRecord, KeyFields } from './records.ts';
 export interface KeyType<Part extends object = object, Sig extends object = object> {
   /** Whether a key of this type can be added to a vault that has never seen it. */
   readonly canAdd: boolean;
+  /**
+   * Whether generate and sign show a prompt. Such a type starts it in `generate` and `sign`, which the core calls
+   * before its first await, so a user gesture still holds; and its new key's record doesn't depend on the vault
+   * header, so the core writes it into the vault as it is and never generates it again, which would prompt again.
+   */
+  readonly prompts: boolean;
   /** The names of this type's own fields of a key record, beside `KeyFields`. */
   readonly fields: readonly string[];
   /** Reads this type's own fields of a stored key record into a new object; throws `corrupted`. Runs on every read, without any secret. */
   parse(record: Fields): Part;
   /** Whether stored bytes are a valid public key of this type. Runs on every read, without any secret. */
   isPublicKey(bytes: Bytes): boolean;
+  /** The bytes the key id hashes beside scope and type (D-05): what names the key on every device. */
+  identity(record: KeyFields & Part): Bytes;
+  /** What this type adds to a key's public information, beside the fields every key has. */
+  info(part: Part): object;
   /** A fresh key, not yet stored. */
-  generate(): Promise<NewKey<Part>>;
-  /** Signs `data` with a stored key and checks the signature under its public key; a stored key that fails is `corrupted`. */
-  sign(record: KeyFields & Part, header: HeaderRecord, data: Bytes): Promise<Sig>;
+  generate(request: NewKeyRequest): Promise<NewKey<Part>>;
+  /**
+   * Signs `data` with the key `key` names and checks the signature under its public key; a stored key that fails
+   * is `corrupted`. `key` is the caller's argument, checked by the core only for its id, scope and type; `load`
+   * reads the stored key, or fails as the core decides (`not-found`, a type mismatch).
+   */
+  sign(key: Fields, data: Bytes, load: () => Promise<StoredKey<Part>>): Promise<Sig>;
+}
+
+/** What `generate` was asked for. */
+export interface NewKeyRequest {
+  readonly scope: string;
+  readonly label?: string;
 }
 
 export interface NewKey<Part extends object = object> {
   readonly publicKey: Bytes;
+  /** The bytes the key id hashes, as `KeyType.identity` reads them from the stored record. */
+  readonly identity: Bytes;
   /** This type's part of the record of `fields`, in the vault of `header`. */
   part(fields: KeyFields, header: HeaderRecord): Promise<Part>;
   /** Zeroes the secret buffers the type owns. The core calls it once the key is stored or abandoned. */
   erase(): void;
 }
 
-export const keyTypes = { ed25519, secp256k1 } satisfies Record<string, KeyType>;
+/** A stored key and the header of its vault, read in one transaction. */
+export interface StoredKey<Part extends object = object> {
+  readonly record: KeyFields & Part;
+  readonly header: HeaderRecord;
+}
+
+export const keyTypes = { ed25519, secp256k1, passkey } satisfies Record<string, KeyType>;
 
 export type KeyTypeName = keyof typeof keyTypes;
 
@@ -43,6 +72,9 @@ export type AddableKeyTypeName = {
 
 /** The member of `Signature` that key type `T` returns, besides its `type`. */
 export type SignatureOf<T extends KeyTypeName> = Awaited<ReturnType<(typeof keyTypes)[T]['sign']>>;
+
+/** What key type `T` adds to its member of `KeyInfo`. */
+export type InfoOf<T extends KeyTypeName> = ReturnType<(typeof keyTypes)[T]['info']>;
 
 /** Key type `name`, widened to `KeyType`: the core calls any type alike, its record part and signature opaque. */
 export function keyType(name: KeyTypeName): KeyType {

@@ -108,7 +108,7 @@ export function parseHeader(value: unknown): HeaderRecord {
   };
 }
 
-// Only unprotected so far; passkey protection adds its kind (and its fields) here.
+// Only unprotected so far; protection adds its kind (and its fields) here.
 function parseProtection(value: unknown): HeaderRecord['protection'] {
   const protection = readObject(value, 'header.protection');
   if (protection.kind !== 'none') throw corrupted('header.protection.kind');
@@ -136,9 +136,9 @@ function parseKeyShape(value: unknown): KeyRecord {
   };
 }
 
-/** The id is derived, so an edited public key, type or scope is caught without any secret. */
+/** The id is derived, so an edited identity (the public key of most types), type or scope is caught without any secret. */
 async function assertIdMatches(record: KeyRecord): Promise<void> {
-  const expected = await keyId(record.scope, record.type, record.publicKey);
+  const expected = await keyId(record.scope, record.type, keyType(record.type).identity(record));
   if (record.id !== expected) throw corrupted('key.id does not match its public key');
 }
 
@@ -148,8 +148,9 @@ export async function parseKeyRecord(value: unknown): Promise<KeyRecord> {
   return record;
 }
 
-export async function keyId(scope: string, type: KeyTypeName, publicKey: Bytes): Promise<string> {
-  const input = encode(DOMAIN_KEY_ID, scope, type, publicKey);
+/** D-05: `identity` is what names the key on every device, its public key for most key types. */
+export async function keyId(scope: string, type: KeyTypeName, identity: Bytes): Promise<string> {
+  const input = encode(DOMAIN_KEY_ID, scope, type, identity);
   const digest = await crypto.subtle.digest('SHA-256', input);
   return base64url(new Uint8Array(digest));
 }

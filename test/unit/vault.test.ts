@@ -2,6 +2,7 @@ import { afterEach, describe, expect, expectTypeOf, test, vi } from 'vitest';
 import { keyTypes, type AddableKeyTypeName } from '../../src/key-types.ts';
 import { Vault, type KeyInfo, type Scope, type Signature } from '../../src/index.ts';
 import {
+  asSealed,
   cleanup,
   deleteHeader,
   done,
@@ -92,7 +93,7 @@ describe.each(keyTypeCases)('$type', ({ type, publicKeyLength, signatureLength, 
       const [listedA] = await scope.list();
       if (!listedA) throw new Error('no key listed');
 
-      const signature = await scope.sign(structuredClone(listedA), message);
+      const signature = await scope.sign(structuredClone(asSealed(listedA)), message);
       expect(await verify(a.publicKey, signature.bytes, message)).toBe(true);
       await scope.delete(structuredClone(a));
       expect(await scope.list()).toEqual([b]);
@@ -483,6 +484,49 @@ test('the type of a signature follows the type of the key passed to sign', async
   expectTypeOf(anySignature).toEqualTypeOf<Signature>();
   expect([edSignature.type, k1Signature.type, anySignature.type]).toEqual(['ed25519', 'secp256k1', 'secp256k1']);
 });
+
+// Type-level only: a passkey key needs an authenticator, so nothing here runs (passkey.test.ts signs with one).
+test('a passkey KeyInfo carries its credential id, and sign with it returns the passkey assertion', () => {
+  expectTypeOf<KeyInfo<'passkey'>>().toEqualTypeOf<{
+    readonly id: string;
+    readonly scope: string;
+    readonly type: 'passkey';
+    readonly publicKey: Uint8Array<ArrayBuffer>;
+    readonly createdAt: Date;
+    readonly label?: string;
+    readonly credentialId: Uint8Array<ArrayBuffer>;
+  }>();
+  expectTypeOf<Scope['generate']>().toBeCallableWith('passkey', { label: 'Payments' });
+  expectTypeOf<ReturnType<typeof signPasskey>>().toEqualTypeOf<Promise<Signature<'passkey'>>>();
+  expectTypeOf<Signature<'passkey'>>().toEqualTypeOf<{
+    readonly type: 'passkey';
+    readonly authenticatorData: Uint8Array<ArrayBuffer>;
+    readonly clientDataJSON: Uint8Array<ArrayBuffer>;
+    readonly signature: Uint8Array<ArrayBuffer>;
+  }>();
+});
+
+// The sealed members, written out: adding the passkey member changed neither.
+test('the KeyInfo and Signature members of sealed key types are unchanged', () => {
+  expectTypeOf<KeyInfo<'ed25519'>>().toEqualTypeOf<SealedKeyInfo<'ed25519'>>();
+  expectTypeOf<KeyInfo<'secp256k1'>>().toEqualTypeOf<SealedKeyInfo<'secp256k1'>>();
+  expectTypeOf<Signature<'ed25519'>>().toEqualTypeOf<SealedSignature<'ed25519'>>();
+  expectTypeOf<Signature<'secp256k1'>>().toEqualTypeOf<SealedSignature<'secp256k1'>>();
+  // A sealed KeyInfo has no credential id.
+  // @ts-expect-error
+  void ((key: KeyInfo<'ed25519'>) => key.credentialId);
+});
+
+type SealedKeyInfo<T> = {
+  readonly id: string;
+  readonly scope: string;
+  readonly type: T;
+  readonly publicKey: Uint8Array<ArrayBuffer>;
+  readonly createdAt: Date;
+  readonly label?: string;
+};
+type SealedSignature<T> = { readonly type: T; readonly bytes: Uint8Array<ArrayBuffer> };
+const signPasskey = (scope: Scope, key: KeyInfo<'passkey'>) => scope.sign(key, message);
 
 // Adding an existing key exists only for key types that can (D-55); no registered type can yet.
 test('no registered key type can add an existing key, so a scope has no add operation', () => {

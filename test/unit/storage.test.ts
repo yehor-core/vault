@@ -1,10 +1,10 @@
-import { afterEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { base64url, encode, type Bytes } from '../../src/bytes.ts';
-import { keyTypes, type KeyTypeName } from '../../src/key-types.ts';
 import { Vault, type VaultErrorCode } from '../../src/index.ts';
 import { keyAad } from '../../src/key-types/sealed.ts';
 import { keyId, type KeyFields } from '../../src/records.ts';
 import { generateWrappingKey, importPublicKey, seal, unseal, type Cipher } from '../../src/seal.ts';
+import { addVirtualAuthenticator, hasVirtualAuthenticator, type VirtualAuthenticator } from './authenticator.ts';
 import {
   cleanup,
   done,
@@ -20,6 +20,8 @@ import {
   readKey,
   replaceKey,
   SECP256K1_G,
+  sealedScheme,
+  type SealedKeyTypeName,
   tickingClock,
   writeHeader,
 } from './helpers.ts';
@@ -54,7 +56,7 @@ function contains(haystack: Uint8Array, needle: Uint8Array): boolean {
 async function plantKey(
   name: string,
   scope: string,
-  type: KeyTypeName,
+  type: SealedKeyTypeName,
   publicKey: Bytes,
   encrypt?: (cipher: Cipher) => Promise<ArrayBuffer>,
 ): Promise<string> {
@@ -70,7 +72,7 @@ async function plantKey(
   const sealed = await seal(
     header.wrappingPublicKey,
     keyAad(fields),
-    encrypt ?? (await keyTypes[type].scheme.generate()).seal,
+    encrypt ?? (await sealedScheme(type).generate()).seal,
   );
   await rawRun(name, ['keys'], (tx) => void tx.objectStore('keys').put({ ...fields, sealed }));
   return fields.id;
@@ -523,7 +525,7 @@ describe.each(keyTypeCases)('$type', ({ type, signatureLength, invalidPublicKeys
 
     // Wraps each generated key so the test sees when its secrets are erased. `during` runs after generation.
     function watchErase(during: () => Promise<void> = async () => {}): { erased: number }[] {
-      const keyType = keyTypes[type].scheme;
+      const keyType = sealedScheme(type);
       const generate = keyType.generate.bind(keyType);
       const pairs: { erased: number }[] = [];
       vi.spyOn(keyType, 'generate').mockImplementation(async () => {
@@ -799,14 +801,12 @@ describe.each(keyTypeCases)('$type', ({ type, signatureLength, invalidPublicKeys
       const [header, record] = [await readHeader(name), await readKey(name, scope.name, key.id)];
 
       // Needs no secret: the wrapping key is public and the associated data is the record's own fields.
-      const attacker = await keyTypes[type].scheme.generate();
+      const attacker = await sealedScheme(type).generate();
       const sealed = await seal(header.wrappingPublicKey, keyAad(record), attacker.seal);
       await replaceKey(name, scope.name, key.id, { ...record, sealed });
 
       const cipher = await unseal(header.protection.privateKey, header.wrappingPublicKey, sealed, keyAad(record));
-      await expect(keyTypes[type].scheme.sign(sealed.ciphertext, cipher, message)).resolves.toHaveLength(
-        signatureLength,
-      );
+      await expect(sealedScheme(type).sign(sealed.ciphertext, cipher, message)).resolves.toHaveLength(signatureLength);
       await expectVaultError(scope.sign(key, message), 'corrupted');
     });
 
@@ -863,6 +863,139 @@ describe.each(keyTypeCases)('$type', ({ type, signatureLength, invalidPublicKeys
       (await done(newer)).close();
 
       await expectVaultError(scope.list(), 'incompatible');
+    });
+  });
+});
+
+// Passkey key records (D-60): their own set, not `keyTypeCases`, since a real passkey needs an authenticator.
+// Planted records need none, so the list() rows run in every engine; the rows that sign need Chromium's.
+describe('passkey records', () => {
+  /** A P-256 public key in SPKI, the encoding `getPublicKey()` returns for ES256. */
+  async function p256Spki(): Promise<Uint8Array<ArrayBuffer>> {
+    const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign']);
+    return new Uint8Array(await crypto.subtle.exportKey('spki', pair.publicKey));
+  }
+
+  /** A self-consistent passkey key record in `scope` of a vault that exists, as any storage writer can add one. */
+  async function plantPasskey(name: string, scope: string) {
+    const credentialId = crypto.getRandomValues(new Uint8Array(32));
+    const record = {
+      v: 1,
+      scope,
+      id: await keyId(scope, 'passkey', credentialId),
+      type: 'passkey',
+      publicKey: await p256Spki(),
+      credentialId,
+      createdAt: Date.now(),
+      label: 'planted',
+    };
+    await rawRun(name, ['keys'], (tx) => void tx.objectStore('keys').put(record));
+    return record;
+  }
+
+  async function planted() {
+    const { vault, scope, name } = await openVault();
+    await scope.generate('ed25519'); // the vault, with a header
+    return { vault, scope, name, record: await plantPasskey(name, scope.name) };
+  }
+
+  test('a planted passkey key record lists, with its credential id: the rows below start from a valid record', async () => {
+    const { scope, record } = await planted();
+    expect((await scope.list()).find((k) => k.id === record.id)).toMatchObject({
+      type: 'passkey',
+      publicKey: record.publicKey,
+      credentialId: record.credentialId,
+    });
+  });
+
+  const p384Spki = async () => {
+    const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-384' }, true, ['sign']);
+    return new Uint8Array(await crypto.subtle.exportKey('spki', pair.publicKey));
+  };
+  const listCases: [what: string, edit: (record: any) => Promise<object> | object][] = [
+    ['credentialId, a bit flipped', (r) => ({ ...r, credentialId: flipBit(r.credentialId) })],
+    ['type, another registered key type', (r) => ({ ...r, type: 'ed25519' })],
+    ['type, a name registered by no build', (r) => ({ ...r, type: 'PASSKEY' })],
+    ['publicKey one byte short', (r) => ({ ...r, publicKey: shorten(r.publicKey) })],
+    ['publicKey the bare 65-byte point, not SPKI', (r) => ({ ...r, publicKey: r.publicKey.slice(-65) })],
+    ['publicKey a point off the curve', (r) => ({ ...r, publicKey: flipBit(r.publicKey) })],
+    // Byte 20 lies in the curve OID: the point is still valid, only the SPKI names another curve.
+    ['publicKey SPKI naming another curve', (r) => ({ ...r, publicKey: flipBit(r.publicKey, 20) })],
+    ['publicKey a P-384 key', async (r) => ({ ...r, publicKey: await p384Spki() })],
+    ['publicKey as a plain Array', (r) => ({ ...r, publicKey: Array.from(r.publicKey) })],
+    ['credentialId as a string', (r) => ({ ...r, credentialId: base64url(r.credentialId) })],
+    ...['v', 'type', 'publicKey', 'credentialId', 'createdAt'].map((field): [string, (r: any) => object] => [
+      `${field} removed`,
+      (r) => without(r, field),
+    ]),
+    ['label as a number', (r) => ({ ...r, label: 1 })],
+    ['an extra field', (r) => ({ ...r, extra: 1 })],
+    [
+      'a sealed part added',
+      (r) => ({ ...r, sealed: { ephemeralPublicKey: r.publicKey, iv: r.publicKey, ciphertext: r.publicKey } }),
+    ],
+  ];
+
+  test.each(listCases)('a passkey key record with a bad field is corrupted at list: %s', async (_, edit) => {
+    const { scope, name, record } = await planted();
+    await replaceKey(name, scope.name, record.id, await edit(record));
+    await expectVaultError(scope.list(), 'corrupted');
+  });
+
+  test('a passkey key record moved to another scope, its id kept, is corrupted at list there: the id binds the scope', async () => {
+    const { vault, scope, name, record } = await planted();
+    await replaceKey(name, scope.name, record.id, { ...record, scope: 'other' });
+    await expectVaultError(vault.scope('other').list(), 'corrupted');
+  });
+
+  // D-18: label and createdAt are not authenticated, and a passkey record has no AAD to catch them.
+  test('an edited label or createdAt of a passkey key record is not detected: list shows the stored values', async () => {
+    const { scope, name, record } = await planted();
+    await replaceKey(name, scope.name, record.id, { ...record, label: 'edited', createdAt: 1 });
+    expect((await scope.list()).find((k) => k.id === record.id)).toMatchObject({
+      label: 'edited',
+      createdAt: new Date(1),
+    });
+  });
+
+  test('the cases above cover every stored field of a passkey key record', async () => {
+    const { record } = await planted();
+    // scope moves the record (its own test); label and createdAt are not detected (their own test).
+    const covered = ['v', 'id', 'type', 'publicKey', 'credentialId', 'createdAt', 'scope', 'label'];
+    expect(Object.keys(record).sort()).toEqual(covered.sort());
+  });
+
+  // Chromium only: signing needs the CDP virtual authenticator (D-62).
+  describe.runIf(hasVirtualAuthenticator)('with an authenticator', () => {
+    let authenticator: VirtualAuthenticator;
+    beforeEach(async () => {
+      authenticator = await addVirtualAuthenticator();
+    });
+    afterEach(async () => {
+      await authenticator.remove();
+    });
+
+    test('an edited public key of a passkey key record lists, and is corrupted at sign', async () => {
+      const { scope, name } = await openVault();
+      const key = await scope.generate('passkey');
+      await replaceKey(name, scope.name, key.id, {
+        ...(await readKey(name, scope.name, key.id)),
+        publicKey: await p256Spki(),
+      });
+
+      await scope.list();
+      await expectVaultError(scope.sign(key, message), 'corrupted');
+    });
+
+    test('an edited label or createdAt of a passkey key record still signs: not detected', async () => {
+      const { scope, name } = await openVault();
+      const key = await scope.generate('passkey', { label: 'Payments' });
+      await replaceKey(name, scope.name, key.id, {
+        ...(await readKey(name, scope.name, key.id)),
+        label: 'edited',
+        createdAt: 1,
+      });
+      await expect(scope.sign(key, message)).resolves.toMatchObject({ type: 'passkey' });
     });
   });
 });
