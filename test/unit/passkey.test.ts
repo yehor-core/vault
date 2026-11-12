@@ -1,12 +1,14 @@
 import { p256 } from '@noble/curves/nist.js';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { KeyInfo, Signature } from '../../src/index.ts';
+import { publicKeyCandidates, sharedPublicKey } from '../../src/key-types/passkey.ts';
 import { addVirtualAuthenticator, hasVirtualAuthenticator, type VirtualAuthenticator } from './authenticator.ts';
 import {
   cleanup,
   expectVaultError,
   openContexts,
   openVault,
+  readAll,
   readHeader,
   readKey,
   replaceKey,
@@ -116,6 +118,50 @@ function rejectNext(method: 'create' | 'get', errorName: string): DOMException {
 /** Replaces a field of a browser object with an own value; its getter stays on the prototype. */
 const replaceField = (object: object, field: string, value: unknown) =>
   Object.defineProperty(object, field, { value, configurable: true });
+
+// D-56: known-answer vectors made with OpenSSL (Node's crypto), not noble: two P-256 keys, DER signatures over SHA-256.
+// prettier-ignore
+const RECOVERY = {
+  keyA: Uint8Array.fromHex('3059301306072a8648ce3d020106082a8648ce3d03010703420004d893804a73974d09d1321c45304efac40f5d87eb92936fbed815f67450191b222bac9c0c16f8911e46fb2e492708701a90286794a36d9c118de7949388f63df9'),
+  keyB: Uint8Array.fromHex('3059301306072a8648ce3d020106082a8648ce3d030107034200043f4147939a5eff347ec890594f63cc09898688db6126490416a6cf53b4beb14a5ec84226d3e146ce68795e4b659d9f4e35744ba640ff0cf02e654c56a283a9e3'),
+  first: utf8.encode('first signed bytes'),
+  second: utf8.encode('second signed bytes'),
+  firstByA: Uint8Array.fromHex('30440220700e31aa62ab4505caa6f17e3da7d65c4bcc1abcaa3546400e57476f6174994402204950c1d06d4087472a073af440a0941230cf241dc88526047262a3f8dbdc41d6'),
+  // firstByA with s replaced by n − s: as valid, and high-S.
+  firstByAHighS: Uint8Array.fromHex('30450220700e31aa62ab4505caa6f17e3da7d65c4bcc1abcaa3546400e57476f61749944022100b6af3e2e92bf78b9d5f8c50bbf5f6bed8c17d68fde927880815726ca2086e37b'),
+  secondByA: Uint8Array.fromHex('304502210085735fe03207594d9d2ba4a47f33f5547b03e71decfb466ec446c5edb59be85702206439d7091f0ebdf18c53fd2c8ed298e91121d1fe410005dd9eecd04f815b2b3e'),
+  secondByB: Uint8Array.fromHex('3045022100a462541eebc42fcf74210436a54fbc82005f5f5f940da7e574f51b03686381e502202872b039cb13c3d449b3129bdaf5d0e0e2beb363ff1acdada93c685d91856ba8'),
+};
+
+// Pure computation: runs in every engine.
+describe('public-key recovery', () => {
+  const { keyA, keyB, first, second } = RECOVERY;
+
+  test('one signature yields two candidate public keys, one of them the signer’s', () => {
+    const candidates = publicKeyCandidates({ signed: first, signature: RECOVERY.firstByA });
+    expect(candidates).toHaveLength(2);
+    expect(candidates).toContainEqual(keyA);
+  });
+
+  test('two signatures by one key share exactly that key, high-S or not', () => {
+    for (const signature of [RECOVERY.firstByA, RECOVERY.firstByAHighS]) {
+      expect(sharedPublicKey({ signed: first, signature }, { signed: second, signature: RECOVERY.secondByA })).toEqual(
+        keyA,
+      );
+    }
+    expect(
+      sharedPublicKey(
+        { signed: second, signature: RECOVERY.secondByB },
+        { signed: first, signature: RECOVERY.firstByA },
+      ),
+    ).toBeUndefined();
+    expect(publicKeyCandidates({ signed: second, signature: RECOVERY.secondByB })).toContainEqual(keyB);
+  });
+
+  test('a malformed signature yields no candidate', () => {
+    expect(publicKeyCandidates({ signed: first, signature: new Uint8Array(70) })).toEqual([]);
+  });
+});
 
 let authenticator: VirtualAuthenticator;
 
@@ -492,6 +538,213 @@ describe.runIf(hasVirtualAuthenticator)('passkey keys', () => {
         const error = await expectVaultError(scope.sign(key, message), 'unsupported');
         expect(error.cause).toBe(cause);
       });
+    });
+  });
+
+  // D-55, D-56, D-57: adding a key is how a vault that has never seen a passkey key learns it.
+  describe('add', () => {
+    /** A passkey key generated in another vault (another database: a fresh device, another profile), and a vault that never saw it. */
+    async function elsewhere(label?: string) {
+      const origin = await openVault();
+      const key = await origin.scope.generate('passkey', label === undefined ? {} : { label });
+      const fresh = await openVault();
+      return { key, origin, fresh };
+    }
+
+    /** The calls of get() from now on, each answered as the authenticator answers. */
+    const spyGet = () => vi.spyOn(navigator.credentials, 'get');
+
+    test('add starts a discoverable prompt before its first await, over a fresh 32-byte challenge, user verification required', async () => {
+      const { fresh } = await elsewhere();
+      const get = spyGet();
+
+      const pending = fresh.scope.add('passkey');
+      expect(get).toHaveBeenCalledTimes(1);
+      await pending;
+      await fresh.scope.add('passkey'); // held now: one more prompt
+
+      const [first, again] = [get.mock.calls[0]?.[0]?.publicKey, get.mock.calls[2]?.[0]?.publicKey];
+      expect(first).toEqual({ challenge: expect.any(Uint8Array), userVerification: 'required' });
+      expect(first?.challenge).toHaveProperty('length', 32);
+      expect(again?.challenge).toHaveProperty('length', 32);
+      expect(again?.challenge).not.toEqual(first?.challenge);
+    });
+
+    test('a passkey key added to a fresh vault is the key generate made: same id, public key and credential id, and it signs', async () => {
+      const { key, origin, fresh } = await elsewhere('Payments');
+      const get = spyGet();
+
+      const added = await fresh.scope.add('passkey', { label: 'Payments' });
+
+      expect(added).toEqual({ ...key, createdAt: expect.any(Date) });
+      const stored = await readKey(origin.name, TEST_SCOPE, key.id);
+      expect(await readKey(fresh.name, TEST_SCOPE, key.id)).toEqual({
+        ...stored,
+        createdAt: added.createdAt.getTime(),
+      });
+      expect(await fresh.scope.list()).toEqual([added]);
+      // The second prompt is for that credential only, over another challenge.
+      expect(get).toHaveBeenCalledTimes(2);
+      const second = get.mock.calls[1]?.[0]?.publicKey;
+      expect(second).toMatchObject({
+        allowCredentials: [{ type: 'public-key', id: key.credentialId }],
+        userVerification: 'required',
+      });
+      expect(second?.challenge).toHaveProperty('length', 32);
+      expect(second?.challenge).not.toEqual(get.mock.calls[0]?.[0]?.publicKey?.challenge);
+      expect(await verifyAssertion(key.publicKey, await fresh.scope.sign(added, message), message)).toBe(true);
+    });
+
+    test('a key added without a label has none, whatever generate was given', async () => {
+      const { fresh } = await elsewhere('Payments');
+      const added = await fresh.scope.add('passkey');
+      expect(added).not.toHaveProperty('label');
+    });
+
+    test('a passkey created in another scope is not-found after the first prompt, and nothing is written', async () => {
+      const { vault, scope, name } = await openVault();
+      await vault.scope('other').generate('passkey');
+      const get = spyGet();
+
+      await expectVaultError(scope.add('passkey'), 'not-found');
+      expect(get).toHaveBeenCalledTimes(1);
+      expect(await scope.list()).toEqual([]);
+      expect((await readAll(name)).keys).toHaveLength(1);
+    });
+
+    test('adding a key the scope holds returns the stored key after one prompt, writes nothing and ignores the label', async () => {
+      const { vault, scope, name } = await openVault();
+      const key = await scope.generate('passkey', { label: 'Payments' });
+      const before = await readAll(name);
+      const listener = vi.fn();
+      vault.onChange(listener);
+      const get = spyGet();
+
+      expect(await scope.add('passkey', { label: 'Other' })).toEqual(key);
+      expect(get).toHaveBeenCalledTimes(1);
+      expect(await readAll(name)).toEqual(before);
+      expect(listener).not.toHaveBeenCalled();
+    });
+
+    test('an add whose first or second prompt is declined is cancelled, and writes nothing', async () => {
+      const { fresh } = await elsewhere();
+      const original = navigator.credentials.get.bind(navigator.credentials); // before any spy wraps it
+      await authenticator.setPresence(false);
+      shortTimeout('get');
+      const firstError = await expectVaultError(fresh.scope.add('passkey'), 'cancelled');
+      expect(firstError.cause).toMatchObject({ name: 'NotAllowedError' });
+
+      await authenticator.setPresence(true);
+      vi.spyOn(navigator.credentials, 'get')
+        .mockImplementationOnce(original)
+        .mockRejectedValueOnce(new DOMException('declined', 'NotAllowedError'));
+      await expectVaultError(fresh.scope.add('passkey'), 'cancelled');
+      expect(await readHeader(fresh.name)).toBeUndefined();
+    });
+
+    test('an add whose second signature is by another key shares no public key, fails and writes nothing', async () => {
+      const { fresh } = await elsewhere();
+      const other = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
+      let calls = 0;
+      changeAssertions(async (credential) => {
+        if (++calls !== 2) return;
+        const response = credential.response as AuthenticatorAssertionResponse;
+        const signed = concat(
+          new Uint8Array(response.authenticatorData),
+          await sha256(new Uint8Array(response.clientDataJSON)),
+        );
+        const raw = new Uint8Array(
+          await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, other.privateKey, signed),
+        );
+        replaceField(response, 'signature', p256.Signature.fromBytes(raw, 'compact').toBytes('der').buffer);
+      });
+      const error = await expectVaultError(fresh.scope.add('passkey'), 'unavailable');
+      expect(error.message).toMatch(/share no public key/);
+      expect(await readHeader(fresh.name)).toBeUndefined();
+    });
+
+    test('an add whose signatures do not parse fails and writes nothing', async () => {
+      const { fresh } = await elsewhere();
+      await authenticator.overrideResponses({ isBogusSignature: true });
+      await expectVaultError(fresh.scope.add('passkey'), 'unavailable');
+      expect(await readHeader(fresh.name)).toBeUndefined();
+    });
+
+    test('an add answered without user verification is unsupported, and writes nothing', async () => {
+      const { fresh } = await elsewhere();
+      await authenticator.overrideResponses({ isBadUV: true });
+      const error = await expectVaultError(fresh.scope.add('passkey'), 'unsupported');
+      expect(error.message).toMatch(/no user verification/);
+      expect(await readHeader(fresh.name)).toBeUndefined();
+    });
+
+    test('an add whose second assertion is over another challenge fails and writes nothing', async () => {
+      const { fresh } = await elsewhere();
+      let calls = 0;
+      changeAssertions(async (credential) => {
+        if (++calls !== 2) return;
+        const response = credential.response as AuthenticatorAssertionResponse;
+        const clientData = JSON.parse(new TextDecoder().decode(response.clientDataJSON));
+        clientData.challenge = base64url(new Uint8Array(32));
+        replaceField(response, 'clientDataJSON', utf8.encode(JSON.stringify(clientData)).buffer);
+      });
+      const error = await expectVaultError(fresh.scope.add('passkey'), 'unavailable');
+      expect(error.message).toMatch(/client data/);
+      expect(await readHeader(fresh.name)).toBeUndefined();
+    });
+
+    // D-61: the record has no sealed part, so it goes into the vault as it is, and no prompt is repeated.
+    test('an add whose second prompt is answered while another context wipes lands in the wiped vault, with two prompts', async () => {
+      const { key } = await elsewhere();
+      const [a, b] = await openContexts();
+      const old = await a.scope.generate('ed25519');
+      const original = navigator.credentials.get.bind(navigator.credentials);
+      const [reached, gate] = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+      const get = vi
+        .spyOn(navigator.credentials, 'get')
+        .mockImplementationOnce(original)
+        .mockImplementationOnce(async (options) => {
+          const credential = await original(options);
+          reached.resolve();
+          await gate.promise;
+          return credential;
+        });
+
+      const pending = a.scope.add('passkey');
+      await reached.promise;
+      await b.vault.wipe();
+      gate.resolve();
+      const added = await pending;
+
+      expect(added.id).toBe(key.id);
+      expect(get).toHaveBeenCalledTimes(2);
+      expect(await a.scope.list()).toEqual([added]);
+      expect(await b.scope.list()).toEqual([added]);
+      await expectVaultError(a.scope.sign(old, message), 'not-found');
+    });
+
+    test('onChange listeners are called after an add that wrote, in this context and the other', async () => {
+      await elsewhere();
+      const [a, b] = await openContexts();
+      const [inA, inB] = [vi.fn(), vi.fn()];
+      a.vault.onChange(inA);
+      b.vault.onChange(inB);
+
+      await a.scope.add('passkey');
+      await vi.waitFor(() => expect(inB).toHaveBeenCalledTimes(1));
+      expect(inA).toHaveBeenCalledTimes(1);
+    });
+
+    test('add of a key type that can’t add, of an unknown type or with a malformed label is a TypeError, without a prompt', async () => {
+      const { scope } = await openVault();
+      const get = spyGet();
+      await expect(scope.add('ed25519' as never)).rejects.toThrow(
+        new TypeError("A key of type ed25519 can't be added, only generated"),
+      );
+      await expect(scope.add('p256' as never)).rejects.toThrow(TypeError);
+      await expect(scope.add('passkey', { label: '' })).rejects.toThrow(TypeError);
+      await expect(scope.add('passkey', null as never)).rejects.toThrow(TypeError);
+      expect(get).not.toHaveBeenCalled();
     });
   });
 

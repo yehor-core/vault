@@ -528,11 +528,18 @@ type SealedKeyInfo<T> = {
 type SealedSignature<T> = { readonly type: T; readonly bytes: Uint8Array<ArrayBuffer> };
 const signPasskey = (scope: Scope, key: KeyInfo<'passkey'>) => scope.sign(key, message);
 
-// Adding an existing key exists only for key types that can (D-55); no registered type can yet.
-test('no registered key type can add an existing key, so a scope has no add operation', () => {
-  expectTypeOf<AddableKeyTypeName>().toBeNever();
-  expectTypeOf<Scope>().not.toHaveProperty('add');
+// Adding an existing key exists only for key types that can (D-55).
+test('add accepts only key types that can add an existing key, and returns that type’s KeyInfo', () => {
+  expectTypeOf<AddableKeyTypeName>().toEqualTypeOf<'passkey'>();
+  expectTypeOf<Scope['add']>().toBeCallableWith('passkey');
+  expectTypeOf<Scope['add']>().toBeCallableWith('passkey', { label: 'Payments' });
+  expectTypeOf<ReturnType<typeof addPasskey>>().toEqualTypeOf<Promise<KeyInfo<'passkey'>>>();
+  // @ts-expect-error Vault generates every sealed key; none exists elsewhere to add
+  void ((scope: Scope) => scope.add('ed25519'));
+  // @ts-expect-error likewise
+  void ((scope: Scope) => scope.add('secp256k1'));
 });
+const addPasskey = (scope: Scope) => scope.add('passkey');
 
 // secp256k1's own behaviour. 64 signatures: without low-S, each is high with probability 1/2.
 test('every secp256k1 signature is low-S, checked without the curve library', async () => {

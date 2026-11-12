@@ -2,7 +2,7 @@ import { p256 } from '@noble/curves/nist.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { base64url, encode, equalBytes, type Bytes } from '../bytes.ts';
 import { VaultError } from '../errors.ts';
-import type { KeyType, NewKeyRequest, StoredKey } from '../key-types.ts';
+import type { KeyType, NewKeyRequest } from '../key-types.ts';
 import { corrupted, readBytes } from '../readers.ts';
 
 // Storage format v1: the scope mark's domain separator and length are part of every passkey's user handle.
@@ -11,6 +11,8 @@ const SCOPE_MARK_LENGTH = 16;
 const USER_ID_RANDOM_LENGTH = 16;
 /** Attestation is 'none', so nothing checks the creation challenge; it is random as the spec asks. */
 const CREATE_CHALLENGE_LENGTH = 32;
+/** The challenges of adding a key are random: nothing is signed but the proof of the key (D-55, D-56). */
+const ADD_CHALLENGE_LENGTH = 32;
 const ES256 = -7;
 const RP_NAME = 'Vault';
 const DEFAULT_USER_NAME = 'Vault key';
@@ -36,7 +38,7 @@ export interface PasskeySignature {
 }
 
 type PasskeyKeyType = KeyType<PasskeyPart, PasskeySignature> & {
-  readonly canAdd: false;
+  readonly canAdd: true;
   info(part: PasskeyPart): PasskeyPart;
 };
 
@@ -46,7 +48,7 @@ type PasskeyKeyType = KeyType<PasskeyPart, PasskeySignature> & {
  * with user verification required. The record has no sealed part, so it is written into the vault as it is (D-61).
  */
 export const passkey: PasskeyKeyType = {
-  canAdd: false,
+  canAdd: true,
   prompts: true,
   fields: ['credentialId'],
   parse: (record) => ({ credentialId: readBytes(record.credentialId, 'key.credentialId') }),
@@ -76,11 +78,62 @@ export const passkey: PasskeyKeyType = {
     if (!equalBytes(record.credentialId, credentialId)) {
       throw new TypeError(`Key ${record.id} has another credential id than the one given`);
     }
-    checkAssertion(assertion, record, challenge);
+    const fault = checkAssertion(assertion, record.credentialId, challenge, `Key ${record.id}`);
+    if (fault !== undefined) throw corrupted(`key ${record.id}: ${fault}`);
+    if (!verifyAssertion(assertion, record.publicKey))
+      throw corrupted(`key ${record.id} does not match its public key`);
     const { authenticatorData, clientDataJSON, signature } = assertion;
     return { authenticatorData, clientDataJSON, signature };
   },
+
+  // D-55, D-56: a discoverable prompt names the credential, a second one for it gives the public key.
+  async add(scope) {
+    const challenge = randomChallenge();
+    const pending = navigator.credentials.get({ publicKey: { challenge, userVerification: 'required' } }); // before any await
+    const presented = await prompt(pending);
+    const first = readAssertion(presented);
+    if (
+      first.userHandle === undefined ||
+      !equalBytes(first.userHandle.subarray(0, SCOPE_MARK_LENGTH), scopeMark(scope))
+    )
+      throw new VaultError('not-found', "The presented passkey's user handle has no mark of this scope"); // D-54
+    failAdd(checkAssertion(first, first.credentialId, challenge, PRESENTED));
+    const { credentialId } = first;
+    return {
+      identity: credentialId,
+      async complete() {
+        const again = randomChallenge();
+        const allowCredentials = [{ type: 'public-key' as const, id: credentialId }];
+        const pendingSecond = navigator.credentials.get({
+          publicKey: { challenge: again, allowCredentials, userVerification: 'required' },
+        });
+        const answered = await prompt(pendingSecond);
+        const second = readAssertion(answered);
+        failAdd(checkAssertion(second, credentialId, again, PRESENTED));
+        const publicKey = sharedPublicKey(signedBy(first), signedBy(second));
+        // Recovered from both, so both verify under it; checked anyway, as every signature is before Vault uses it.
+        if (publicKey === undefined || !verifyAssertion(first, publicKey) || !verifyAssertion(second, publicKey))
+          throw addFailed('its two assertions share no public key');
+        return { publicKey, identity: credentialId, part: async () => ({ credentialId }), erase: () => {} };
+      },
+    };
+  },
 };
+
+const PRESENTED = 'The presented passkey';
+
+/** An assertion that fails a check while adding a key: an answer of the authenticator, not stored data, is wrong. */
+function failAdd(fault: string | undefined): void {
+  if (fault !== undefined) throw addFailed(fault);
+}
+
+function addFailed(fault: string): VaultError {
+  return new VaultError('unavailable', `Adding the presented passkey: ${fault}`);
+}
+
+function randomChallenge(): Bytes {
+  return crypto.getRandomValues(new Uint8Array(ADD_CHALLENGE_LENGTH));
+}
 
 function creationOptions({ scope, label }: NewKeyRequest): PublicKeyCredentialCreationOptions {
   const name = label ?? DEFAULT_USER_NAME; // D-52: the picker shows it; the label leaves Vault
@@ -98,9 +151,13 @@ function creationOptions({ scope, label }: NewKeyRequest): PublicKeyCredentialCr
 /** D-54: the scope mark, then fresh random bytes, so no new passkey overwrites another at its authenticator. */
 function userId(scope: string): Bytes {
   const id = new Uint8Array(SCOPE_MARK_LENGTH + USER_ID_RANDOM_LENGTH);
-  id.set(sha256(encode(DOMAIN_SCOPE_MARK, scope)).subarray(0, SCOPE_MARK_LENGTH));
+  id.set(scopeMark(scope));
   id.set(crypto.getRandomValues(new Uint8Array(USER_ID_RANDOM_LENGTH)), SCOPE_MARK_LENGTH);
   return id;
+}
+
+function scopeMark(scope: string): Uint8Array {
+  return sha256(encode(DOMAIN_SCOPE_MARK, scope)).subarray(0, SCOPE_MARK_LENGTH);
 }
 
 /** A WebAuthn call's result; any failure is a VaultError: a declined prompt `cancelled`, no user verification `unsupported` (D-59). */
@@ -133,6 +190,8 @@ function readCreated(credential: Credential | null): { credentialId: Bytes; publ
 
 interface Assertion extends PasskeySignature {
   readonly credentialId: Bytes;
+  /** Absent when the authenticator returned none, as it may for a prompt restricted to one credential. */
+  readonly userHandle: Bytes | undefined;
 }
 
 function readAssertion(credential: Credential | null): Assertion {
@@ -141,29 +200,46 @@ function readAssertion(credential: Credential | null): Assertion {
   const { response } = credential;
   return {
     credentialId: new Uint8Array(credential.rawId),
+    userHandle: response.userHandle === null ? undefined : new Uint8Array(response.userHandle),
     authenticatorData: new Uint8Array(response.authenticatorData),
     clientDataJSON: new Uint8Array(response.clientDataJSON),
     signature: new Uint8Array(response.signature),
   };
 }
 
-/** D-53: the assertion is for this key, with the user verified (else `unsupported`, D-59), over our challenge, and verifies under the stored key. */
-function checkAssertion(assertion: Assertion, record: StoredKey<PasskeyPart>['record'], challenge: Bytes): void {
-  const { credentialId, authenticatorData, clientDataJSON, signature } = assertion;
-  if (!equalBytes(credentialId, record.credentialId))
-    throw corrupted(`key ${record.id}: the assertion is for another credential`);
-  const flags = authenticatorData[FLAGS_OFFSET];
-  if (flags === undefined) throw corrupted(`key ${record.id}: the assertion has no flags`);
+/**
+ * D-53: what is wrong with an assertion that should be for `credentialId`, over `challenge`, with the user verified;
+ * undefined if nothing. No user verification is `unsupported` (D-59), thrown for `subject`. The signature is checked apart.
+ */
+function checkAssertion(
+  assertion: Assertion,
+  credentialId: Bytes,
+  challenge: Bytes,
+  subject: string,
+): string | undefined {
+  if (!equalBytes(assertion.credentialId, credentialId)) return 'the assertion is for another credential';
+  const flags = assertion.authenticatorData[FLAGS_OFFSET];
+  if (flags === undefined) return 'the assertion has no flags';
   if ((flags & FLAG_UV) === 0)
-    throw new VaultError('unsupported', `Key ${record.id}: the authenticator answered with no user verification`);
-  const clientData = parseClientData(clientDataJSON);
+    throw new VaultError('unsupported', `${subject}: the authenticator answered with no user verification`);
+  const clientData = parseClientData(assertion.clientDataJSON);
   if (clientData?.type !== 'webauthn.get' || clientData.challenge !== base64url(challenge))
-    throw corrupted(`key ${record.id}: the assertion's client data is not for this signature`);
+    return "the assertion's client data is not for this signature";
+  return undefined;
+}
+
+/** What the authenticator signed: authenticatorData ‖ SHA-256(clientDataJSON), and the signature. */
+function signedBy({ authenticatorData, clientDataJSON, signature }: Assertion): Signed {
   const clientDataHash = sha256(clientDataJSON);
-  const signed = new Uint8Array(authenticatorData.length + clientDataHash.length); // what the authenticator signed
+  const signed = new Uint8Array(authenticatorData.length + clientDataHash.length);
   signed.set(authenticatorData);
   signed.set(clientDataHash, authenticatorData.length);
-  if (!verify(signature, signed, record.publicKey)) throw corrupted(`key ${record.id} does not match its public key`);
+  return { signed, signature };
+}
+
+function verifyAssertion(assertion: Assertion, publicKey: Bytes): boolean {
+  const { signed, signature } = signedBy(assertion);
+  return verify(signature, signed, publicKey);
 }
 
 function parseClientData(json: Bytes): { type?: unknown; challenge?: unknown } | undefined {
@@ -181,6 +257,41 @@ function verify(signature: Bytes, signed: Bytes, publicKey: Bytes): boolean {
   } catch {
     return false; // malformed DER
   }
+}
+
+/** Bytes an authenticator signed with ES256, and its DER signature. */
+export interface Signed {
+  readonly signed: Bytes;
+  readonly signature: Bytes;
+}
+
+/** The public keys, in SPKI, under which `signature` verifies over `signed`: two, but for a malformed signature (D-56). */
+export function publicKeyCandidates({ signed, signature }: Signed): Bytes[] {
+  const hash = sha256(signed);
+  // Recovery ids 2 and 3 need r ≥ n, which a P-256 signature reaches with probability about 2^-128.
+  return [0, 1].flatMap((recovery) => {
+    try {
+      const parsed = p256.Signature.fromBytes(signature, 'der').addRecoveryBit(recovery);
+      return [spki(parsed.recoverPublicKey(hash).toBytes(false))];
+    } catch {
+      return []; // malformed DER, or no point for this recovery id
+    }
+  });
+}
+
+/** D-56: the one public key both signatures verify under, or undefined when they share none. */
+export function sharedPublicKey(first: Signed, second: Signed): Bytes | undefined {
+  const others = publicKeyCandidates(second);
+  const shared = publicKeyCandidates(first).filter((candidate) => others.some((other) => equalBytes(candidate, other)));
+  return shared.length === 1 ? shared[0] : undefined;
+}
+
+/** The SPKI of an uncompressed P-256 point. */
+function spki(point: Uint8Array): Bytes {
+  const bytes = new Uint8Array(P256_SPKI_PREFIX.length + point.length);
+  bytes.set(P256_SPKI_PREFIX);
+  bytes.set(point, P256_SPKI_PREFIX.length);
+  return bytes;
 }
 
 /** SPKI of a P-256 point on the curve (D-60): WebKit's raw import accepts off-curve points, so Vault checks. */
