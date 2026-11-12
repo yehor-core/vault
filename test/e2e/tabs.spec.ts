@@ -1,6 +1,14 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { webcrypto } from 'node:crypto';
-import { generate, holdKeyGeneration, listAndSign, openDemo, startGenerate, type PageKey } from './contexts.ts';
+import {
+  generate,
+  holdKeyGeneration,
+  listAndSign,
+  metaRecords,
+  openDemo,
+  startGenerate,
+  type PageKey,
+} from './contexts.ts';
 
 // Several tabs on one vault (D-43): two pages of one browser context share its IndexedDB, as two tabs do.
 // One interleaving per property; the unit tests in concurrency.test.ts run the others. One key type: the write
@@ -12,6 +20,17 @@ const message = 'message to sign';
 async function verifies(publicKey: number[], signature: number[], message: string): Promise<boolean> {
   const key = await webcrypto.subtle.importKey('raw', Uint8Array.from(publicKey), 'Ed25519', false, ['verify']);
   return webcrypto.subtle.verify('Ed25519', key, Uint8Array.from(signature), new TextEncoder().encode(message));
+}
+
+/** Each page lists exactly `keys` in the demo scope, and every key signs there with a signature that verifies. */
+async function expectKeysInEvery(pages: Page[], keys: PageKey[]): Promise<void> {
+  const byId = (keys: PageKey[]) =>
+    keys.map(({ id, publicKey }) => ({ id, publicKey })).toSorted((x, y) => (x.id < y.id ? -1 : 1));
+  for (const page of pages) {
+    const listed = await listAndSign(page, message);
+    expect(byId(listed)).toEqual(byId(keys));
+    for (const { publicKey, signature } of listed) expect(await verifies(publicKey, signature, message)).toBe(true);
+  }
 }
 
 test('concurrent generates from two tabs each store their key, which lists and signs in both tabs', async ({
@@ -28,11 +47,24 @@ test('concurrent generates from two tabs each store their key, which lists and s
   await held.release();
   const key = await pending.settled();
 
-  const byId = (keys: PageKey[]) =>
-    keys.map(({ id, publicKey }) => ({ id, publicKey })).toSorted((x, y) => (x.id < y.id ? -1 : 1));
-  for (const page of [a, b]) {
-    const listed = await listAndSign(page, message);
-    expect(byId(listed)).toEqual(byId([existing, key, other]));
-    for (const { publicKey, signature } of listed) expect(await verifies(publicKey, signature, message)).toBe(true);
-  }
+  await expectKeysInEvery([a, b], [existing, key, other]);
+});
+
+test('concurrent first generates from two tabs converge on one vault: both keys list and sign in both tabs under the one header', async ({
+  context,
+}) => {
+  const a = await openDemo(context);
+  const b = await openDemo(context);
+  const held = await holdKeyGeneration(a); // a has found no header and made its own, not stored yet
+
+  const pending = await startGenerate(a);
+  await held.reached;
+  const other = await generate(b); // b's header is stored first: b wins
+  const winner = await metaRecords(b);
+  await held.release();
+  const key = await pending.settled(); // a's header loses: a redoes against b's, without an error
+
+  expect(winner).toHaveLength(1);
+  expect(await metaRecords(a)).toEqual(winner);
+  await expectKeysInEvery([a, b], [key, other]);
 });

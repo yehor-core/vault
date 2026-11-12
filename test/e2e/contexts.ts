@@ -114,3 +114,32 @@ export async function listAndSign(page: Page, message: string): Promise<(PageKey
     { scope: DEMO_SCOPE, message },
   );
 }
+
+/**
+ * Every record in the `meta` store of the demo's database, read in the page with raw IndexedDB, not with Vault:
+ * the wrapping public key of each, as plain numbers.
+ */
+export async function metaRecords(page: Page): Promise<{ wrappingPublicKey: number[] }[]> {
+  return page.evaluate(async () => {
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const open = indexedDB.open('vault');
+      open.onsuccess = () => resolve(open.result);
+      open.onerror = () => reject(open.error);
+    });
+    try {
+      const all = db.transaction('meta', 'readonly').objectStore('meta').getAll();
+      const records = await new Promise<unknown[]>((resolve, reject) => {
+        all.onsuccess = () => resolve(all.result);
+        all.onerror = () => reject(all.error);
+      });
+      return records.map((record) => {
+        // `as`: checked just below
+        const { wrappingPublicKey } = (record ?? {}) as { wrappingPublicKey?: unknown };
+        if (!(wrappingPublicKey instanceof Uint8Array)) throw new Error('a meta record without a wrapping public key');
+        return { wrappingPublicKey: Array.from(wrappingPublicKey) };
+      });
+    } finally {
+      db.close();
+    }
+  });
+}
