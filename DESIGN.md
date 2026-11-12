@@ -20,7 +20,7 @@ Vault is a browser-native private-key store on IndexedDB. An application calls i
 | Optional, upgradeable protection | Format ready; upgrade not built yet | §3.1, §5 |
 | Cheap to add, gated to use | Adding needs only the public wrapping key | §3.1 |
 | Many key types, one model | ed25519 and secp256k1; a new sealed key type is one module and one registry entry | §7.5 |
-| Correct under concurrency and failure | Atomic writes, fail-closed reads; no lost updates tested across tabs, first-time setup and wipe races not yet | §4.2, §6 |
+| Correct under concurrency and failure | Atomic writes, fail-closed reads; no lost updates and first-time setup tested across tabs, wipe races not yet | §4.2, §6 |
 | A small, idiomatic domain API | Built for unprotected ed25519 and secp256k1 keys in named scopes | §7 |
 
 ## 2. Threat model
@@ -204,7 +204,7 @@ stateDiagram-v2
 
 | From | Operation | To | Prompts | Atomic how | On failure |
 |---|---|---|---|---|---|
-| Empty | `generate` | Unprotected | none | Header and key added in one transaction; the header is added only if still absent and no key record exists | Nothing written: `vault › the first generate writes header and key atomically…` |
+| Empty | `generate` | Unprotected | none | Header and key added in one transaction; the header is added only if still absent and no key record exists. Two first `generate` calls converge on one header: `concurrency › concurrent first-time setup › a first generate held while another context runs its first generate…`; `e2e › concurrent first generates from two tabs converge on one vault…` (Chromium, Firefox, WebKit) | Nothing written: `vault › the first generate writes header and key atomically…` |
 | Corrupted (key records without a header) | `list`, `generate`, `sign` | Corrupted | none | — | `corrupted`; only `wipe` leads out |
 | Unprotected | `generate` | Unprotected | none | One transaction re-checks the header and adds the key (the re-check is not tested until the multi-tab slice) | Nothing written: `vault › a write that aborts at commit…` |
 | Unprotected | `delete` | Unprotected | none | One request | Nothing deleted |
@@ -228,15 +228,15 @@ stateDiagram-v2
 
 ## 6. Concurrency and crash safety
 
-A transaction ends once control returns to the event loop with no request pending. Awaiting a request's promise continues in a microtask and keeps it alive. But in Firefox and WebKit, an await that settles in a later task, `crypto.subtle` included, ends it (Chromium happens to keep it). So all crypto runs **before** a transaction, and the transaction only checks and writes (`src/db.ts` `transact`; for a new key, `src/vault.ts` `#prepareKeyRecord` then `#commitKeyRecord`).
+A transaction ends once control returns to the event loop with no request pending. Awaiting a request's promise continues in a microtask and keeps it alive. But in Firefox and WebKit, an await that settles in a later task, `crypto.subtle` included, ends it (Chromium happens to keep it). So all crypto runs **before** a transaction, and the transaction only checks and writes (`src/db.ts` `transact`; for a new key, `src/scope.ts` `#prepareKeyRecord` then `#commitKeyRecord`).
 
 | Requirement | Mechanism | Verified by |
 |---|---|---|
 | Multi-record changes are atomic, also when the tab closes or crashes mid-write | One transaction per change; a throwing body aborts it, and a transaction cut off by a closed tab or a crashed renderer never commits | `vault › the first generate writes header and key atomically…`; `e2e › a tab closed while the first generate writes…` (Chromium, Firefox, WebKit), `e2e › a renderer crash while the first generate writes…` (Chromium) |
-| No lost updates | Readwrite transactions on overlapping stores run one at a time across tabs. Each key is its own record: `generate` adds one and `delete` removes one, so writes from two tabs never overwrite each other. `generate` re-reads the header inside its write transaction and adds only if the header is the one it sealed to; otherwise it redoes the whole operation. It tries 3 times in total, then fails with `unavailable`. | `src/vault.ts` `#commitKeyRecord`, `untilUnchanged`; `concurrency › no lost updates › a generate held while another context generates in the same scope…`, `› a generate held while another context generates in another scope…`, `› a generate held while another context deletes a key of its scope…`; `e2e › concurrent generates from two tabs each store their key, which lists and signs in both tabs` (Chromium, Firefox, WebKit) |
-| Concurrent first-time setup converges | The header is added only if absent, inside the write transaction; the loser redoes against the winner's header | `src/vault.ts` `#headerForWrite`, `#commitKeyRecord`; multi-tab tests not written yet |
+| No lost updates | Readwrite transactions on overlapping stores run one at a time across tabs. Each key is its own record: `generate` adds one and `delete` removes one, so writes from two tabs never overwrite each other. `generate` re-reads the header inside its write transaction and adds only if the header is the one it sealed to; otherwise it redoes the whole operation. It tries 3 times in total, then fails with `unavailable`. | `src/scope.ts` `#commitKeyRecord`, `untilUnchanged`; `concurrency › no lost updates › a generate held while another context generates in the same scope…`, `› a generate held while another context generates in another scope…`, `› a generate held while another context deletes a key of its scope…`; `e2e › concurrent generates from two tabs each store their key, which lists and signs in both tabs` (Chromium, Firefox, WebKit) |
+| Concurrent first-time setup converges | The header is added only if absent, inside the write transaction; the loser redoes against the winner's header, without an error | `src/scope.ts` `#headerForWrite`, `#commitKeyRecord`; `concurrency › concurrent first-time setup › a first generate held while another context runs its first generate…`; `e2e › concurrent first generates from two tabs converge on one vault…` (Chromium, Firefox, WebKit) |
 | A call in flight across `close()` | A vault and its scopes share one connection (`src/connection.ts`), taken right before each transaction, after re-checking `close()` | `vault › a call in flight when the vault is closed fails with InvalidStateError…`, `› scope() after close() throws InvalidStateError…` |
-| A stale context can't undo a wipe | As above: a write sealed to a wiped header fails its check | `src/vault.ts` `#commitKeyRecord`; multi-tab tests not written yet |
+| A stale context can't undo a wipe | As above: a write sealed to a wiped header fails its check | `src/scope.ts` `#commitKeyRecord`; multi-tab tests not written yet |
 | Other contexts learn about changes | Not built yet | |
 
 ## 7. Public API
@@ -412,7 +412,7 @@ Scopes are what an embedding layer builds on: it chooses the scope from the send
 - **Persistent storage is not requested** (§4.4): the application decides when to ask, and until it does, eviction can lose every sealed key.
 - **One bad record fails all of `list()`** for its scope (fail closed).
 - **A record planted with a made-up key type name reads as `incompatible`, not `corrupted`**: a well-formed name this build doesn't know can't be told from a newer build's type. It still fails closed (§4.2).
-- **Concurrent first-time setup and a stale context against a wipe (§6) are implemented but not yet tested across tabs**, and other contexts are not notified of changes.
+- **A stale context against a wipe (§6) is implemented but not yet tested across tabs**, and other contexts are not notified of changes.
 - **Scopes group keys; they do not isolate same-origin code** (§2.3). Any same-origin code can open any scope.
 - **The scopes of a vault can't be listed, and one scope can't be cleared on its own**: `wipe()` is vault-wide, and a scope's keys go one `delete` at a time.
 - **`sign` and `delete` take a key's public information, not an id**: a caller who kept only an id calls `list()` first and passes the matching `KeyInfo`.

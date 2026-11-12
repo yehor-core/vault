@@ -144,6 +144,8 @@ export async function openVault(
 export interface Context {
   readonly vault: Vault;
   readonly scope: Scope;
+  /** The database name, the same in both contexts: for raw reads. */
+  readonly name: string;
 }
 
 /** Two contexts on one fresh database, each with its scope TEST_SCOPE; closed and deleted by `cleanup`. */
@@ -152,8 +154,8 @@ export async function openContexts(): Promise<[Context, Context]> {
   const other = await Vault.open({ name });
   cleanups.push(async () => other.close());
   return [
-    { vault, scope },
-    { vault: other, scope: other.scope(TEST_SCOPE) },
+    { vault, scope, name },
+    { vault: other, scope: other.scope(TEST_SCOPE), name },
   ];
 }
 

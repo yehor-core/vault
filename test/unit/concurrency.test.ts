@@ -1,6 +1,15 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import type { KeyInfo, Vault } from '../../src/index.ts';
-import { cleanup, expectVaultError, holdGenerate, keyTypeCases, openContexts, type KeyTypeCase } from './helpers.ts';
+import {
+  cleanup,
+  expectVaultError,
+  holdGenerate,
+  keyTypeCases,
+  openContexts,
+  readAll,
+  readHeader,
+  type KeyTypeCase,
+} from './helpers.ts';
 
 // Two contexts are two Vault.open() of one database in one page: each has its own connection, as two tabs do.
 // A race is forced by holding one context's generate after it read the header, while the other writes.
@@ -73,6 +82,24 @@ describe.each(keyTypeCases)('$type', ({ type, verify }) => {
 
       await expectKeysInEvery([a.vault, b.vault], [kept, key], verify);
       for (const { scope } of contexts) await expectVaultError(scope.sign(deleted, message), 'not-found');
+    });
+  });
+
+  describe('concurrent first-time setup', () => {
+    test('a first generate held while another context runs its first generate: both resolve under the winner header, the only one stored, and list and sign in both contexts', async () => {
+      const [a, b] = await openContexts();
+      const held = holdGenerate(type); // a has found no header and made its own, not stored yet
+
+      const pending = a.scope.generate(type);
+      await held.reached;
+      const other = await b.scope.generate(type); // b's header is stored first: b wins
+      const winnerHeader = await readHeader(a.name);
+      held.release();
+      const key = await pending; // a's header loses: a redoes against b's, without an error
+
+      const { meta } = await readAll(a.name); // the header is the only record meta holds
+      expect(meta).toEqual([expect.objectContaining({ wrappingPublicKey: winnerHeader.wrappingPublicKey })]);
+      await expectKeysInEvery([a.vault, b.vault], [key, other], verify);
     });
   });
 });
