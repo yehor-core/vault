@@ -1,6 +1,7 @@
 import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { expect, vi } from 'vitest';
 import { Vault, VaultError, type KeyInfo, type KeyTypeName, type Scope, type VaultErrorCode } from '../../src/index.ts';
+import { keyTypes } from '../../src/key-types.ts';
 
 /** What the tests know about one key type, independently of Vault's code. */
 export interface KeyTypeCase {
@@ -137,6 +138,41 @@ export async function openVault(
     await done(indexedDB.deleteDatabase(name));
   });
   return { vault, scope: vault.scope(TEST_SCOPE), name };
+}
+
+/** One of two contexts on one vault: its own `Vault.open()`, so its own connection, as a tab has. */
+export interface Context {
+  readonly vault: Vault;
+  readonly scope: Scope;
+}
+
+/** Two contexts on one fresh database, each with its scope TEST_SCOPE; closed and deleted by `cleanup`. */
+export async function openContexts(): Promise<[Context, Context]> {
+  const { vault, scope, name } = await openVault();
+  const other = await Vault.open({ name });
+  cleanups.push(async () => other.close());
+  return [
+    { vault, scope },
+    { vault: other, scope: other.scope(TEST_SCOPE) },
+  ];
+}
+
+/**
+ * Holds the next `generate` of key type `type`, from whichever vault of this page calls it first: the key is
+ * generated, then held before it is sealed and written, so another context can write meanwhile. `reached`
+ * resolves once the call is held; `release` lets it go on. Later calls pass. Restored by vi.restoreAllMocks.
+ */
+export function holdGenerate(type: KeyTypeName): { reached: Promise<void>; release: () => void } {
+  const generate = keyTypes[type].generate;
+  const reached = Promise.withResolvers<void>();
+  const gate = Promise.withResolvers<void>();
+  vi.spyOn(keyTypes[type], 'generate').mockImplementationOnce(async () => {
+    const generated = await generate();
+    reached.resolve();
+    await gate.promise;
+    return generated;
+  });
+  return { reached: reached.promise, release: gate.resolve };
 }
 
 /** A KeyInfo naming key `id` of `scope`, for ids no call returned (planted or edited records); Vault reads only id, scope and type. */
