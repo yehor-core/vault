@@ -106,6 +106,13 @@ function shortTimeout(method: 'create' | 'get') {
     );
 }
 
+/** Makes the next `method` prompt fail with a DOMException of this name, which no virtual authenticator raises. */
+function rejectNext(method: 'create' | 'get', errorName: string): DOMException {
+  const cause = new DOMException('injected', errorName);
+  vi.spyOn(navigator.credentials, method).mockRejectedValueOnce(cause);
+  return cause;
+}
+
 /** Replaces a field of a browser object with an own value; its getter stays on the prototype. */
 const replaceField = (object: object, field: string, value: unknown) =>
   Object.defineProperty(object, field, { value, configurable: true });
@@ -414,7 +421,7 @@ describe.runIf(hasVirtualAuthenticator)('passkey keys', () => {
 
   // D-59: a declined, timed-out or unanswerable prompt is cancelled; it is the user's answer, so not retryable.
   describe('a failed prompt', () => {
-    test('a generate whose prompt is declined is cancelled, with the browser error as cause, and writes nothing', async () => {
+    test('a generate whose prompt is declined or times out is cancelled, with the browser error as cause, and writes nothing', async () => {
       const { scope, name } = await openVault();
       await authenticator.setPresence(false);
       shortTimeout('create');
@@ -426,7 +433,7 @@ describe.runIf(hasVirtualAuthenticator)('passkey keys', () => {
       expect(await scope.list()).toEqual([]);
     });
 
-    test('a sign whose prompt is declined is cancelled, with the browser error as cause', async () => {
+    test('a sign whose prompt is declined or times out is cancelled, with the browser error as cause', async () => {
       const { scope } = await openVault();
       const key = await scope.generate('passkey');
       await authenticator.setPresence(false);
@@ -448,6 +455,13 @@ describe.runIf(hasVirtualAuthenticator)('passkey keys', () => {
       expect(error.cause).toMatchObject({ name: 'NotAllowedError' });
       expect(await verifyAssertion(kept.publicKey, await scope.sign(kept, message), message)).toBe(true);
     });
+
+    test('a prompt that fails with any other browser error is unavailable, with it as cause', async () => {
+      const { scope } = await openVault();
+      const cause = rejectNext('create', 'UnknownError');
+      const error = await expectVaultError(scope.generate('passkey'), 'unavailable');
+      expect(error.cause).toBe(cause);
+    });
   });
 
   // D-59: TASK "Using a passkey key requires user verification (PIN or biometric), not just presence".
@@ -463,15 +477,9 @@ describe.runIf(hasVirtualAuthenticator)('passkey keys', () => {
 
     // No virtual authenticator raises these, so the browser's rejection is injected.
     describe.each(['NotSupportedError', 'ConstraintError'])('the browser error %s', (errorName) => {
-      const rejectNext = (method: 'create' | 'get') => {
-        const cause = new DOMException('injected', errorName);
-        vi.spyOn(navigator.credentials, method).mockRejectedValueOnce(cause);
-        return cause;
-      };
-
       test('makes generate unsupported, with it as cause, and writes nothing', async () => {
         const { scope, name } = await openVault();
-        const cause = rejectNext('create');
+        const cause = rejectNext('create', errorName);
         const error = await expectVaultError(scope.generate('passkey'), 'unsupported');
         expect(error.cause).toBe(cause);
         expect(await readHeader(name)).toBeUndefined();
@@ -480,16 +488,10 @@ describe.runIf(hasVirtualAuthenticator)('passkey keys', () => {
       test('makes sign unsupported, with it as cause', async () => {
         const { scope } = await openVault();
         const key = await scope.generate('passkey');
-        const cause = rejectNext('get');
+        const cause = rejectNext('get', errorName);
         const error = await expectVaultError(scope.sign(key, message), 'unsupported');
         expect(error.cause).toBe(cause);
       });
-    });
-
-    test('any other browser error is unavailable, as before', async () => {
-      const { scope } = await openVault();
-      vi.spyOn(navigator.credentials, 'create').mockRejectedValueOnce(new DOMException('injected', 'UnknownError'));
-      await expectVaultError(scope.generate('passkey'), 'unavailable');
     });
   });
 

@@ -110,9 +110,9 @@ async function prompt(pending: Promise<Credential | null>): Promise<Credential |
   } catch (cause) {
     const name = cause instanceof DOMException ? cause.name : undefined;
     if (name === 'NotAllowedError')
-      throw new VaultError('cancelled', 'The passkey prompt was declined, timed out or found no passkey', { cause });
+      throw new VaultError('cancelled', `The passkey prompt ended with ${name}`, { cause });
     if (name === 'NotSupportedError' || name === 'ConstraintError')
-      throw new VaultError('unsupported', 'The authenticator cannot verify the user for this passkey', { cause });
+      throw new VaultError('unsupported', `The passkey prompt ended with ${name}`, { cause });
     throw new VaultError('unavailable', 'The passkey prompt failed', { cause });
   }
 }
