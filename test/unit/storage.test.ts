@@ -281,11 +281,11 @@ describe('format versioning', () => {
   });
 });
 
-// The tamper table (D-34): {header, key record} × {modified, swapped, truncated, malformed}. Each case runs the
-// operations in this order and names the first one that detects it; the ones before it succeed (not detected).
+// The tamper table (D-34) runs the operations in this order; the ones before the detecting one must succeed.
 // generate comes before sign: it shows what a replaced header lets through (D-36).
 const OPS = ['list', 'generate', 'sign'] as const;
 type Op = (typeof OPS)[number];
+const opsBefore = (op: Op) => OPS.slice(0, OPS.indexOf(op));
 
 /** The stored header and two key records of a vault; `foreign` reads another vault database of this origin. */
 interface Stored {
@@ -394,6 +394,10 @@ const cases: TamperCase[] = [
     ...h,
     wrappingPublicKey: (await writerKeyPair()).publicKey,
   })),
+  headerCase('modified', 'a wrapping public key on another curve, P-384', 'generate', async (h) => {
+    const pair = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-384' }, false, ['deriveKey']);
+    return { ...h, wrappingPublicKey: new Uint8Array(await crypto.subtle.exportKey('spki', pair.publicKey)) };
+  }),
   headerCase('modified', 'a root private key of the writer', 'sign', async (h) => ({
     ...h,
     protection: { ...h.protection, privateKey: (await writerKeyPair()).privateKey },
@@ -436,6 +440,10 @@ const cases: TamperCase[] = [
   headerCase('malformed', 'an extra field', 'list', (h) => ({ ...h, extra: 1 })),
 
   ...edits.map(({ field, detectedBy, edit }) => keyCase('modified', field, detectedBy, (r, s) => edit(r, s.other))),
+  keyCase('modified', 'type, another registered key type', 'list', (r) => ({
+    ...r,
+    type: keyTypeCases.find((c) => c.type !== r.type)?.type,
+  })),
   keyCase(
     'swapped',
     'the key record of another vault database of this origin',
@@ -460,6 +468,7 @@ const cases: TamperCase[] = [
     }),
   },
   keyCase('truncated', 'publicKey one byte short', 'list', (r) => ({ ...r, publicKey: shorten(r.publicKey) })),
+  // Only the IV has a fixed length list() checks; a short ephemeral key or ciphertext fails to open at sign.
   ...['ephemeralPublicKey', 'iv', 'ciphertext'].map((field) =>
     keyCase('truncated', `sealed.${field} one byte short`, field === 'iv' ? 'list' : 'sign', (r) => ({
       ...r,
@@ -487,7 +496,7 @@ const cases: TamperCase[] = [
 const tamperCases = cases.map((c) => [`${c.record} ${c.kind}, ${c.what}; ${verdict(c.detectedBy)}`, c] as const);
 
 function verdict(detectedBy: Op): string {
-  const missed = OPS.slice(0, OPS.indexOf(detectedBy));
+  const missed = opsBefore(detectedBy);
   return missed.length === 0
     ? `corrupted at ${detectedBy}`
     : `not detected by ${missed.join(' or ')}, corrupted at ${detectedBy}`;
@@ -641,7 +650,7 @@ describe.each(keyTypeCases)('$type', ({ type, signatureLength, invalidPublicKeys
 
     test.each(tamperCases)(
       'a bad record is corrupted at the operation the table names: %s',
-      async (_, { tamper, detectedBy }) => {
+      async (_, { record, tamper, detectedBy }) => {
         const { scope, name } = await openVault();
         const [target, other] = [await scope.generate(type, { label: 'target' }), await scope.generate(type)];
         const tampered = await tamper({
@@ -659,8 +668,13 @@ describe.each(keyTypeCases)('$type', ({ type, signatureLength, invalidPublicKeys
           generate: () => scope.generate(type),
           sign: () => scope.sign({ ...target, id: tampered.target?.id ?? target.id }, message),
         };
-        for (const op of OPS.slice(0, OPS.indexOf(detectedBy))) await run[op](); // not detected: exempt from break-check
+        for (const op of opsBefore(detectedBy)) await run[op](); // not detected: exempt from break-check
         await expectVaultError(run[detectedBy](), 'corrupted');
+        // A key record's tampering stays with the records it touched: the other key signs unless it was swapped too.
+        if (record === 'key record') {
+          if (tampered.other) await expectVaultError(scope.sign(other, message), 'corrupted');
+          else await expect(scope.sign(other, message)).resolves.toMatchObject({ type });
+        }
       },
     );
   });
