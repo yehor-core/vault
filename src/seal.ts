@@ -27,8 +27,13 @@ export async function generateWrappingKey(): Promise<{ publicKey: Bytes; private
 
 // SPKI, not raw or JWK: WebKit accepts off-curve points in those formats, which opens an invalid-curve attack
 // on the wrapping private key through records an attacker plants.
-export function importPublicKey(spki: Bytes): Promise<CryptoKey> {
-  return crypto.subtle.importKey('spki', spki, P256, false, []);
+// Firefox imports an SPKI of another curve as asked and names its real curve in `algorithm`, so it is checked here.
+export async function importPublicKey(spki: Bytes): Promise<CryptoKey> {
+  const key = await crypto.subtle.importKey('spki', spki, P256, false, []);
+  if (!('namedCurve' in key.algorithm) || key.algorithm.namedCurve !== P256.namedCurve) {
+    throw new DOMException(`Not a ${P256.namedCurve} public key`, 'DataError');
+  }
+  return key;
 }
 
 /**

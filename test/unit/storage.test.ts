@@ -281,6 +281,227 @@ describe('format versioning', () => {
   });
 });
 
+// The tamper table (D-34) runs the operations in this order; the ones before the detecting one must succeed.
+// generate comes before sign: it shows what a replaced header lets through (D-36).
+const OPS = ['list', 'generate', 'sign'] as const;
+type Op = (typeof OPS)[number];
+const opsBefore = (op: Op) => OPS.slice(0, OPS.indexOf(op));
+
+/** The stored header and two key records of a vault; `foreign` reads another vault database of this origin. */
+interface Stored {
+  readonly header: any;
+  readonly target: any;
+  readonly other: any;
+  foreign(): Promise<{ header: any; key: any }>;
+}
+/** What is stored in place of the header and of the two key records; absent means unchanged. */
+interface Tampered {
+  readonly header?: unknown;
+  readonly target?: any;
+  readonly other?: any;
+}
+interface TamperCase {
+  readonly record: 'header' | 'key record';
+  readonly kind: 'modified' | 'swapped' | 'truncated' | 'malformed';
+  readonly what: string;
+  readonly detectedBy: Op;
+  tamper(stored: Stored): Promise<Tampered>;
+}
+
+const headerCase = (
+  kind: TamperCase['kind'],
+  what: string,
+  detectedBy: Op,
+  edit: (header: any, stored: Stored) => unknown,
+): TamperCase => ({
+  record: 'header',
+  kind,
+  what,
+  detectedBy,
+  tamper: async (s) => ({ header: await edit(s.header, s) }),
+});
+
+const keyCase = (
+  kind: TamperCase['kind'],
+  what: string,
+  detectedBy: Op,
+  edit: (record: any, stored: Stored) => any,
+): TamperCase => ({
+  record: 'key record',
+  kind,
+  what,
+  detectedBy,
+  tamper: async (s) => ({ target: await edit(s.target, s) }),
+});
+
+function without(object: any, field: string): any {
+  const { [field]: _, ...rest } = object;
+  return rest;
+}
+
+const shorten = (bytes: Uint8Array) => bytes.slice(0, -1);
+
+/** A P-256 key pair of the wrapping kind, made by the writer, not by Vault. */
+async function writerKeyPair(): Promise<{ publicKey: Uint8Array; privateKey: CryptoKey }> {
+  const pair = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveKey']);
+  return {
+    publicKey: new Uint8Array(await crypto.subtle.exportKey('spki', pair.publicKey)),
+    privateKey: pair.privateKey,
+  };
+}
+
+// Each edits one stored field of a key record; `the edit cases cover every stored field` checks the list is whole.
+const edits: { field: string; detectedBy: Op; edit: (record: any, other: any) => any }[] = [
+  { field: 'v', detectedBy: 'list', edit: (r) => ({ ...r, v: 2 }) },
+  {
+    field: 'id',
+    detectedBy: 'list',
+    edit: (r) => ({ ...r, id: base64url(crypto.getRandomValues(new Uint8Array(32))) }),
+  },
+  { field: 'type', detectedBy: 'list', edit: (r) => ({ ...r, type: r.type.toUpperCase() }) }, // registered by no build
+  { field: 'publicKey', detectedBy: 'list', edit: (r, other) => ({ ...r, publicKey: other.publicKey }) },
+  { field: 'createdAt', detectedBy: 'sign', edit: (r) => ({ ...r, createdAt: r.createdAt - 1 }) },
+  { field: 'label', detectedBy: 'sign', edit: (r) => ({ ...r, label: `${r.label}!` }) },
+  {
+    field: 'sealed.ephemeralPublicKey',
+    detectedBy: 'sign',
+    edit: (r, other) => ({ ...r, sealed: { ...r.sealed, ephemeralPublicKey: other.sealed.ephemeralPublicKey } }),
+  },
+  {
+    field: 'sealed.iv',
+    detectedBy: 'sign',
+    edit: (r) => ({ ...r, sealed: { ...r.sealed, iv: flipBit(r.sealed.iv) } }),
+  },
+  {
+    field: 'sealed.ciphertext',
+    detectedBy: 'sign',
+    edit: (r) => ({ ...r, sealed: { ...r.sealed, ciphertext: flipBit(r.sealed.ciphertext) } }),
+  },
+];
+
+const cases: TamperCase[] = [
+  headerCase('modified', 'v is 2', 'list', (h) => ({ ...h, v: 2 })),
+  headerCase('modified', 'another protection kind', 'list', (h) => ({
+    ...h,
+    protection: { ...h.protection, kind: 'passkey' },
+  })),
+  headerCase('modified', 'a bit of the wrapping public key flipped, off the curve', 'generate', (h) => ({
+    ...h,
+    wrappingPublicKey: flipBit(h.wrappingPublicKey),
+  })),
+  // D-36: generate seals the new key to the writer's public key; existing keys no longer open.
+  headerCase('modified', 'a wrapping public key of the writer', 'sign', async (h) => ({
+    ...h,
+    wrappingPublicKey: (await writerKeyPair()).publicKey,
+  })),
+  headerCase('modified', 'a wrapping public key on another curve, P-384', 'generate', async (h) => {
+    const pair = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-384' }, false, ['deriveKey']);
+    return { ...h, wrappingPublicKey: new Uint8Array(await crypto.subtle.exportKey('spki', pair.publicKey)) };
+  }),
+  headerCase('modified', 'a root private key of the writer', 'sign', async (h) => ({
+    ...h,
+    protection: { ...h.protection, privateKey: (await writerKeyPair()).privateKey },
+  })),
+  headerCase(
+    'swapped',
+    'the header of another vault database of this origin',
+    'sign',
+    async (_, s) => (await s.foreign()).header,
+  ),
+  headerCase('truncated', 'the wrapping public key one byte short', 'generate', (h) => ({
+    ...h,
+    wrappingPublicKey: shorten(h.wrappingPublicKey),
+  })),
+  ...['v', 'wrappingPublicKey', 'protection'].map((field) =>
+    headerCase('truncated', `${field} removed`, 'list', (h) => without(h, field)),
+  ),
+  ...['kind', 'privateKey'].map((field) =>
+    headerCase('truncated', `protection.${field} removed`, 'list', (h) => ({
+      ...h,
+      protection: without(h.protection, field),
+    })),
+  ),
+  headerCase('malformed', 'null, not an object', 'list', () => null),
+  headerCase('malformed', 'the wrapping public key as a plain Array', 'list', (h) => ({
+    ...h,
+    wrappingPublicKey: Array.from(h.wrappingPublicKey),
+  })),
+  headerCase('malformed', 'the root private key not a CryptoKey', 'list', (h) => ({
+    ...h,
+    protection: { ...h.protection, privateKey: {} },
+  })),
+  headerCase('malformed', 'the root private key an AES key', 'sign', async (h) => ({
+    ...h,
+    protection: {
+      ...h.protection,
+      privateKey: await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt']),
+    },
+  })),
+  headerCase('malformed', 'an extra field', 'list', (h) => ({ ...h, extra: 1 })),
+
+  ...edits.map(({ field, detectedBy, edit }) => keyCase('modified', field, detectedBy, (r, s) => edit(r, s.other))),
+  keyCase('modified', 'type, another registered key type', 'list', (r) => ({
+    ...r,
+    type: keyTypeCases.find((c) => c.type !== r.type)?.type,
+  })),
+  keyCase(
+    'swapped',
+    'the key record of another vault database of this origin',
+    'sign',
+    async (_, s) => (await s.foreign()).key,
+  ),
+  {
+    record: 'key record',
+    kind: 'swapped',
+    what: 'contents exchanged with another key record, scope and id kept',
+    detectedBy: 'list',
+    tamper: async (s) => ({ target: { ...s.other, id: s.target.id }, other: { ...s.target, id: s.other.id } }),
+  },
+  {
+    record: 'key record',
+    kind: 'swapped',
+    what: 'sealed parts exchanged with another key record',
+    detectedBy: 'sign',
+    tamper: async (s) => ({
+      target: { ...s.target, sealed: s.other.sealed },
+      other: { ...s.other, sealed: s.target.sealed },
+    }),
+  },
+  keyCase('truncated', 'publicKey one byte short', 'list', (r) => ({ ...r, publicKey: shorten(r.publicKey) })),
+  // Only the IV has a fixed length list() checks; a short ephemeral key or ciphertext fails to open at sign.
+  ...['ephemeralPublicKey', 'iv', 'ciphertext'].map((field) =>
+    keyCase('truncated', `sealed.${field} one byte short`, field === 'iv' ? 'list' : 'sign', (r) => ({
+      ...r,
+      sealed: { ...r.sealed, [field]: shorten(r.sealed[field]) },
+    })),
+  ),
+  // scope and id make up the record's IndexedDB key: a record without them can't be stored.
+  ...['v', 'type', 'publicKey', 'createdAt', 'sealed'].map((field) =>
+    keyCase('truncated', `${field} removed`, 'list', (r) => without(r, field)),
+  ),
+  keyCase('truncated', 'label removed', 'sign', (r) => without(r, 'label')),
+  ...['ephemeralPublicKey', 'iv', 'ciphertext'].map((field) =>
+    keyCase('truncated', `sealed.${field} removed`, 'list', (r) => ({ ...r, sealed: without(r.sealed, field) })),
+  ),
+  keyCase('malformed', 'createdAt as a string', 'list', (r) => ({ ...r, createdAt: String(r.createdAt) })),
+  keyCase('malformed', 'sealed.iv as a plain Array', 'list', (r) => ({
+    ...r,
+    sealed: { ...r.sealed, iv: Array.from(r.sealed.iv) },
+  })),
+  keyCase('malformed', 'sealed null, not an object', 'list', (r) => ({ ...r, sealed: null })),
+  keyCase('malformed', 'an empty label', 'list', (r) => ({ ...r, label: '' })),
+  keyCase('malformed', 'an extra field', 'list', (r) => ({ ...r, extra: 1 })),
+];
+// Titled through %s: vitest cuts a $field value at 40 characters, which would drop the verdict.
+const tamperCases = cases.map((c) => [`${c.record} ${c.kind}, ${c.what}; ${verdict(c.detectedBy)}`, c] as const);
+
+function verdict(detectedBy: Op): string {
+  const missed = opsBefore(detectedBy);
+  return missed.length === 0
+    ? `corrupted at ${detectedBy}`
+    : `not detected by ${missed.join(' or ')}, corrupted at ${detectedBy}`;
+}
+
 describe.each(keyTypeCases)('$type', ({ type, signatureLength, invalidPublicKeys, recordPrivateKeys }) => {
   describe('encryption at rest', () => {
     test('no private key bytes are stored: only ciphertext and a non-extractable root key', async () => {
@@ -419,29 +640,46 @@ describe.each(keyTypeCases)('$type', ({ type, signatureLength, invalidPublicKeys
     });
   });
 
-  describe('integrity', () => {
-    // Each case edits one stored field. `atList` says whether list() can see it (no secret needed)
-    // or only sign() does, when the key is decrypted.
-    const edits: { field: string; atList: boolean; edit: (record: any, other: any) => any }[] = [
-      { field: 'v', atList: true, edit: (r) => ({ ...r, v: 2 }) },
-      { field: 'id', atList: true, edit: (r) => ({ ...r, id: base64url(crypto.getRandomValues(new Uint8Array(32))) }) },
-      { field: 'type', atList: true, edit: (r) => ({ ...r, type: r.type.toUpperCase() }) }, // registered by no build
-      { field: 'publicKey', atList: true, edit: (r, other) => ({ ...r, publicKey: other.publicKey }) },
-      { field: 'createdAt', atList: false, edit: (r) => ({ ...r, createdAt: r.createdAt - 1 }) },
-      { field: 'label', atList: false, edit: (r) => ({ ...r, label: `${r.label}!` }) },
-      {
-        field: 'sealed.ephemeralPublicKey',
-        atList: false,
-        edit: (r, other) => ({ ...r, sealed: { ...r.sealed, ephemeralPublicKey: other.sealed.ephemeralPublicKey } }),
-      },
-      { field: 'sealed.iv', atList: false, edit: (r) => ({ ...r, sealed: { ...r.sealed, iv: flipBit(r.sealed.iv) } }) },
-      {
-        field: 'sealed.ciphertext',
-        atList: false,
-        edit: (r) => ({ ...r, sealed: { ...r.sealed, ciphertext: flipBit(r.sealed.ciphertext) } }),
-      },
-    ];
+  describe('tamper table', () => {
+    /** Another vault database of this origin, with one key in the same scope name. */
+    async function foreignVault(): Promise<{ header: any; key: any }> {
+      const { scope, name } = await openVault();
+      const key = await scope.generate(type);
+      return { header: await readHeader(name), key: await readKey(name, scope.name, key.id) };
+    }
 
+    test.each(tamperCases)(
+      'a bad record is corrupted at the operation the table names: %s',
+      async (_, { record, tamper, detectedBy }) => {
+        const { scope, name } = await openVault();
+        const [target, other] = [await scope.generate(type, { label: 'target' }), await scope.generate(type)];
+        const tampered = await tamper({
+          header: await readHeader(name),
+          target: await readKey(name, scope.name, target.id),
+          other: await readKey(name, scope.name, other.id),
+          foreign: foreignVault,
+        });
+        if (tampered.header !== undefined) await writeHeader(name, tampered.header);
+        if (tampered.target) await replaceKey(name, scope.name, target.id, tampered.target);
+        if (tampered.other) await replaceKey(name, scope.name, other.id, tampered.other);
+
+        const run: Record<Op, () => Promise<unknown>> = {
+          list: () => scope.list(),
+          generate: () => scope.generate(type),
+          sign: () => scope.sign({ ...target, id: tampered.target?.id ?? target.id }, message),
+        };
+        for (const op of opsBefore(detectedBy)) await run[op](); // not detected: exempt from break-check
+        await expectVaultError(run[detectedBy](), 'corrupted');
+        // A key record's tampering stays with the records it touched: the other key signs unless it was swapped too.
+        if (record === 'key record') {
+          if (tampered.other) await expectVaultError(scope.sign(other, message), 'corrupted');
+          else await expect(scope.sign(other, message)).resolves.toMatchObject({ type });
+        }
+      },
+    );
+  });
+
+  describe('integrity', () => {
     test('the edit cases cover every stored field of a key record', async () => {
       const { scope, name } = await openVault();
       const record = await readKey(name, scope.name, (await scope.generate(type, { label: 'target' })).id);
@@ -450,19 +688,6 @@ describe.each(keyTypeCases)('$type', ({ type, signatureLength, invalidPublicKeys
       );
       // `scope` is part of the record's IndexedDB key; moving a record between scopes has its own test.
       expect(fields.sort()).toEqual([...edits.map((e) => e.field), 'scope'].sort());
-    });
-
-    test.each(edits)('editing $field of a key record fails closed', async ({ edit, atList }) => {
-      tickingClock();
-      const { scope, name } = await openVault();
-      const [target, other] = [await scope.generate(type, { label: 'target' }), await scope.generate(type)];
-      const edited = edit(await readKey(name, scope.name, target.id), await readKey(name, scope.name, other.id));
-      await replaceKey(name, scope.name, target.id, edited);
-
-      if (atList) await expectVaultError(scope.list(), 'corrupted');
-      else expect((await scope.list()).map((k) => k.id)).toEqual([target.id, other.id]); // not visible without decrypting
-      await expectVaultError(scope.sign({ ...target, id: edited.id }, message), 'corrupted');
-      await expect(scope.sign(other, message)).resolves.toMatchObject({ type });
     });
 
     // D-18: list() reads no secret, so it shows an edited label; only sign() can detect the edit.
@@ -565,17 +790,6 @@ describe.each(keyTypeCases)('$type', ({ type, signatureLength, invalidPublicKeys
 
       await scope.delete(key);
       expect((await readAll(name)).keys).toEqual([]);
-    });
-
-    test('ciphertexts swapped between two key records fail closed', async () => {
-      const { scope, name } = await openVault();
-      const [a, b] = [await scope.generate(type), await scope.generate(type)];
-      const [ra, rb] = [await readKey(name, scope.name, a.id), await readKey(name, scope.name, b.id)];
-      await replaceKey(name, scope.name, a.id, { ...ra, sealed: rb.sealed });
-      await replaceKey(name, scope.name, b.id, { ...rb, sealed: ra.sealed });
-
-      await expectVaultError(scope.sign(a, message), 'corrupted');
-      await expectVaultError(scope.sign(b, message), 'corrupted');
     });
 
     test('a key an attacker sealed to the public wrapping key decrypts, but is rejected instead of used', async () => {
