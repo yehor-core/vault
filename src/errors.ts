@@ -9,7 +9,18 @@ export type VaultErrorCode =
    */
   | 'incompatible'
   /** No key with this id. */
-  | 'not-found';
+  | 'not-found'
+  /**
+   * A key's prompt ended without an answer: the user declined it, it timed out, or the authenticator holds no such
+   * credential (lost, deleted or replaced at its provider). No engine tells these apart (D-59). Not retryable: let
+   * the user try again when they choose; a key that keeps failing this way may be gone, so offer to delete it.
+   */
+  | 'cancelled'
+  /**
+   * The authenticator can't verify the user (PIN or biometric), or answered without verifying them (D-59). Not
+   * retryable: ask the user for an authenticator that verifies them.
+   */
+  | 'unsupported';
 
 /** Every failure Vault reports. Branch on `code`; retry only when `retryable`. */
 export class VaultError extends Error {

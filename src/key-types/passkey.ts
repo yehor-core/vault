@@ -103,11 +103,16 @@ function userId(scope: string): Bytes {
   return id;
 }
 
-/** A WebAuthn call's result; any failure, a declined prompt included, is a VaultError. */
+/** A WebAuthn call's result; any failure is a VaultError: a declined prompt `cancelled`, no user verification `unsupported` (D-59). */
 async function prompt(pending: Promise<Credential | null>): Promise<Credential | null> {
   try {
     return await pending; // await: so catch sees it
   } catch (cause) {
+    const name = cause instanceof DOMException ? cause.name : undefined;
+    if (name === 'NotAllowedError')
+      throw new VaultError('cancelled', `The passkey prompt ended with ${name}`, { cause });
+    if (name === 'NotSupportedError' || name === 'ConstraintError')
+      throw new VaultError('unsupported', `The passkey prompt ended with ${name}`, { cause });
     throw new VaultError('unavailable', 'The passkey prompt failed', { cause });
   }
 }
@@ -142,14 +147,15 @@ function readAssertion(credential: Credential | null): Assertion {
   };
 }
 
-/** D-53: the assertion is for this key, with the user verified, over our challenge, and verifies under the stored key. */
+/** D-53: the assertion is for this key, with the user verified (else `unsupported`, D-59), over our challenge, and verifies under the stored key. */
 function checkAssertion(assertion: Assertion, record: StoredKey<PasskeyPart>['record'], challenge: Bytes): void {
   const { credentialId, authenticatorData, clientDataJSON, signature } = assertion;
   if (!equalBytes(credentialId, record.credentialId))
     throw corrupted(`key ${record.id}: the assertion is for another credential`);
   const flags = authenticatorData[FLAGS_OFFSET];
-  if (flags === undefined || (flags & FLAG_UV) === 0)
-    throw corrupted(`key ${record.id}: the assertion has no user verification`);
+  if (flags === undefined) throw corrupted(`key ${record.id}: the assertion has no flags`);
+  if ((flags & FLAG_UV) === 0)
+    throw new VaultError('unsupported', `Key ${record.id}: the authenticator answered with no user verification`);
   const clientData = parseClientData(clientDataJSON);
   if (clientData?.type !== 'webauthn.get' || clientData.challenge !== base64url(challenge))
     throw corrupted(`key ${record.id}: the assertion's client data is not for this signature`);
