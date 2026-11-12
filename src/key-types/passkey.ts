@@ -90,12 +90,13 @@ export const passkey: PasskeyKeyType = {
   async add(scope) {
     const challenge = randomChallenge();
     const pending = navigator.credentials.get({ publicKey: { challenge, userVerification: 'required' } }); // before any await
-    const first = readAssertion(await prompt(pending));
+    const presented = await prompt(pending);
+    const first = readAssertion(presented);
     if (
       first.userHandle === undefined ||
       !equalBytes(first.userHandle.subarray(0, SCOPE_MARK_LENGTH), scopeMark(scope))
     )
-      throw new VaultError('not-found', 'The passkey presented was not created in this scope'); // D-54
+      throw new VaultError('not-found', "The presented passkey's user handle has no mark of this scope"); // D-54
     failAdd(checkAssertion(first, first.credentialId, challenge, PRESENTED));
     const { credentialId } = first;
     return {
@@ -106,7 +107,8 @@ export const passkey: PasskeyKeyType = {
         const pendingSecond = navigator.credentials.get({
           publicKey: { challenge: again, allowCredentials, userVerification: 'required' },
         });
-        const second = readAssertion(await prompt(pendingSecond));
+        const answered = await prompt(pendingSecond);
+        const second = readAssertion(answered);
         failAdd(checkAssertion(second, credentialId, again, PRESENTED));
         const publicKey = sharedPublicKey(signedBy(first), signedBy(second));
         // Recovered from both, so both verify under it; checked anyway, as every signature is before Vault uses it.
@@ -265,23 +267,14 @@ export interface Signed {
 
 /** The public keys, in SPKI, under which `signature` verifies over `signed`: two, but for a malformed signature (D-56). */
 export function publicKeyCandidates({ signed, signature }: Signed): Bytes[] {
-  let parsed;
-  try {
-    parsed = p256.Signature.fromBytes(signature, 'der');
-  } catch {
-    return [];
-  }
   const hash = sha256(signed);
   // Recovery ids 2 and 3 need r ≥ n, which a P-256 signature reaches with probability about 2^-128.
   return [0, 1].flatMap((recovery) => {
     try {
-      const point = parsed.addRecoveryBit(recovery).recoverPublicKey(hash).toBytes(false);
-      const spki = new Uint8Array(P256_SPKI_PREFIX.length + point.length);
-      spki.set(P256_SPKI_PREFIX);
-      spki.set(point, P256_SPKI_PREFIX.length);
-      return [spki];
+      const parsed = p256.Signature.fromBytes(signature, 'der').addRecoveryBit(recovery);
+      return [spki(parsed.recoverPublicKey(hash).toBytes(false))];
     } catch {
-      return [];
+      return []; // malformed DER, or no point for this recovery id
     }
   });
 }
@@ -291,6 +284,14 @@ export function sharedPublicKey(first: Signed, second: Signed): Bytes | undefine
   const others = publicKeyCandidates(second);
   const shared = publicKeyCandidates(first).filter((candidate) => others.some((other) => equalBytes(candidate, other)));
   return shared.length === 1 ? shared[0] : undefined;
+}
+
+/** The SPKI of an uncompressed P-256 point. */
+function spki(point: Uint8Array): Bytes {
+  const bytes = new Uint8Array(P256_SPKI_PREFIX.length + point.length);
+  bytes.set(P256_SPKI_PREFIX);
+  bytes.set(point, P256_SPKI_PREFIX.length);
+  return bytes;
 }
 
 /** SPKI of a P-256 point on the curve (D-60): WebKit's raw import accepts off-curve points, so Vault checks. */

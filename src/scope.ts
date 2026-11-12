@@ -38,6 +38,7 @@ import {
 } from './storage.ts';
 
 const MAX_ATTEMPTS = 3;
+const ADD_FAILED = 'The browser failed to add the presented key';
 
 /** Public information about a key; readable without unlocking. One member per key type. */
 export type KeyInfo<T extends KeyTypeName = KeyTypeName> = {
@@ -118,12 +119,12 @@ export class Scope {
     const kind = keyType(type);
     if (!kind.canAdd) throw new TypeError(`A key of type ${type} can't be added, only generated`);
     const label = readLabelOption(options);
-    const pending = fromKeyType(kind.add(this.#name), 'The browser failed to find the key'); // the prompt, before any await
+    const pending = fromKeyType(kind.add(this.#name), ADD_FAILED); // the prompt, before any await
     const presented = await pending;
     const id = await keyId(this.#name, type, presented.identity);
     let record = await this.#findKey(id); // D-57: a key the scope holds takes no second prompt and no write
     if (!record) {
-      const completed = fromKeyType(presented.complete(), 'The browser failed to find the key');
+      const completed = fromKeyType(presented.complete(), ADD_FAILED);
       record = await this.#storeAsIs(type, label, completed);
       this.#changes.notify();
     }
