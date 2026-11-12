@@ -1,7 +1,7 @@
 /// <reference types="@vitest/browser-playwright" />
 import { cdp, server } from 'vitest/browser';
 
-/** Passkey unit tests need the CDP WebAuthn domain, which only Chromium has (D-62); Firefox and WebKit get e2e in #69. */
+/** Passkey unit tests need the CDP WebAuthn domain, which only Chromium has (D-62); Firefox and WebKit get e2e in test/e2e/passkey.spec.ts. */
 export const hasVirtualAuthenticator = server.browser === 'chromium';
 
 /** A credential as the CDP WebAuthn domain reports it. */
