@@ -2,7 +2,7 @@
 
 A browser-native private-key store on top of IndexedDB. Design: [DESIGN.md](DESIGN.md).
 
-> Status: S2 in progress. Unprotected vault with ed25519 and secp256k1 keys in named scopes: generate, list, sign, delete per scope; wipe for the whole vault. Keys are encrypted at rest in a versioned storage format, and errors are classified. Keys can carry a label, fixed at generate. Not built yet: multi-tab notifications, passkey keys, passkey protection.
+> Status: S4 in progress. Unprotected vault with ed25519 and secp256k1 keys in named scopes: generate, list, sign, delete per scope; wipe for the whole vault. Keys are encrypted at rest in a versioned storage format, records are validated and fail closed, and errors are classified. Keys can carry a label, fixed at generate. Several tabs can use one vault at once: concurrent writes lose no update, first-time setup converges, and a stale tab can't undo a wipe. Not built yet: change notifications across tabs, passkey keys, passkey protection.
 
 ## Setup
 

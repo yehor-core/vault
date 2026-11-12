@@ -7,14 +7,15 @@
 // Without an engine, a test break runs in Chromium, Firefox and WebKit, and is red only if it went red in each:
 // the README's Property → test rows claim every listed engine. Name one engine for a fast loop, or for a guard that
 // only one engine needs. A test file under test/e2e/ runs in Playwright (its projects carry the engine names),
-// any other in vitest.
+// one under scripts/ in Node's test runner (no engine), any other in vitest.
+// Each run ends by printing the lines of break-check.log it appended: the range to quote.
 // --typecheck is for type-level tests: red means `npm run typecheck` failed with an error in <test file>.
 // --batch reads a JSON array of { file, text, replacement, test, pattern?, engine?, typecheck? } and runs each
 // break alone. The text must occur exactly once. The file is restored after every break, Ctrl-C included.
 // Exit 0 means every break went red; exit 1 means one went unnoticed (or no test matched); exit 2 is a usage error.
 
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 
 interface Break {
   readonly file: string;
@@ -109,6 +110,7 @@ function typecheckRed(spec: Break): boolean {
 }
 
 function testRed(spec: Break): boolean {
+  if (spec.test.startsWith('scripts/')) return nodeRed(spec);
   const engines = spec.engine === undefined ? ENGINES : [spec.engine];
   const redIn = spec.test.startsWith('test/e2e/') ? playwrightRedIn : vitestRedIn;
   // Every engine runs, even after one stays green, so the output shows the whole picture.
@@ -150,6 +152,27 @@ function playwrightRedIn(spec: Break, engine: string): boolean {
   return false;
 }
 
+/** A script test runs in Node, in no browser: red means a matched test failed. */
+function nodeRed(spec: Break): boolean {
+  // The spec reporter's summary, whatever the terminal. No NODE_TEST_CONTEXT, which a parent test run sets to have
+  // the results sent to it, and no NODE_OPTIONS, where the pre-commit hook sets the dot reporter.
+  const { NODE_TEST_CONTEXT: _context, NODE_OPTIONS: _options, ...env } = process.env;
+  const args = ['--test', '--test-reporter=spec', '--test-name-pattern', spec.pattern ?? '', spec.test];
+  const run = spawnSync(process.execPath, args, { encoding: 'utf8', env });
+  const lines = `${run.stdout}${run.stderr}`.split('\n');
+  const count = (label: string) => Number(/\d+/.exec(lines.find((l) => l.startsWith(`ℹ ${label} `)) ?? '')?.[0] ?? 0);
+  const summary = `${count('pass')} passed, ${count('fail')} failed`;
+  if (count('fail') > 0) {
+    report(`red in node: ${summary}`);
+    for (const line of new Set(lines.filter((l) => /^✖ /.test(l)))) report(`  ${line.trim()}`);
+    return true;
+  }
+  report(`NOT red in node: ${summary}`);
+  return false;
+}
+
+const lineCount = () => (existsSync(LOG) ? readFileSync(LOG, 'utf8').split('\n').length - 1 : 0);
+const firstLine = lineCount() + 1;
 const breaks = parseArgs(process.argv.slice(2));
 report(`# ${new Date().toISOString()}`, false);
 let notRed = 0;
@@ -160,4 +183,6 @@ for (const spec of breaks) {
 }
 if (breaks.length > 1)
   report(notRed === 0 ? `all ${breaks.length} breaks red` : `${notRed} of ${breaks.length} breaks not red`);
+// The range to hand to /code-review and to quote in the PR: this run's lines, and only them.
+console.log(`logged: ${LOG} lines ${firstLine}–${lineCount()}`);
 process.exitCode = notRed === 0 ? 0 : 1;

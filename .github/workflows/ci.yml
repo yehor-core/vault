@@ -17,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 0 # check:decisions compares with the merge-base
+          fetch-depth: 0 # check:decisions compares with the merge-base; check:refs reads the branch's commits
       - uses: actions/setup-node@v7
         with:
           node-version: 26
@@ -27,7 +27,7 @@ jobs:
       - run: npm run lint
       - run: npm run format:check # lint-staged formats only staged files; this catches drift elsewhere
       - run: npm run typecheck
-      - run: npm run check:refs
+      - run: npm run check:refs -- origin/${{ github.base_ref || 'main' }}
       - run: npm run check:casts
       - run: npm run check:decisions -- origin/${{ github.base_ref || 'main' }}
       - run: npm test

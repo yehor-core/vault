@@ -30,8 +30,18 @@ export class Scope {
 export function untilUnchanged() {}
 `;
 
+interface Fixture {
+  readonly readme?: string;
+  /** docs/ROADMAP.md; absent by default, which skips the status check. */
+  readonly roadmap?: string;
+  /** Messages of commits made on a branch off `base`; with none, the fixture is no git repo. */
+  readonly commits?: readonly string[];
+  /** The message of the commit being made, passed as --message. */
+  readonly message?: string;
+}
+
 /** Runs check:refs in a fixture repo whose DESIGN.md is `design`, with `extraUnit` appended to the unit tests. */
-function checkDesign(design: string, extraUnit = ''): { ok: boolean; output: string } {
+function checkDesign(design: string, extraUnit = '', fixture: Fixture = {}): { ok: boolean; output: string } {
   const dir = mkdtempSync(join(tmpdir(), 'check-refs-'));
   try {
     mkdirSync(join(dir, 'test/unit'), { recursive: true });
@@ -41,8 +51,30 @@ function checkDesign(design: string, extraUnit = ''): { ok: boolean; output: str
     writeFileSync(join(dir, 'test/e2e/demo.spec.ts'), E2E);
     writeFileSync(join(dir, 'src/scope.ts'), SCOPE);
     writeFileSync(join(dir, 'DESIGN.md'), design);
-    writeFileSync(join(dir, 'README.md'), '');
-    const run = spawnSync(process.execPath, [SCRIPT], { cwd: dir, encoding: 'utf8' });
+    writeFileSync(join(dir, 'README.md'), fixture.readme ?? '');
+    if (fixture.roadmap !== undefined) {
+      mkdirSync(join(dir, 'docs'));
+      writeFileSync(join(dir, 'docs/ROADMAP.md'), fixture.roadmap);
+    }
+    const args = [SCRIPT];
+    // Inside a hook, git sets GIT_DIR, GIT_INDEX_FILE and more to the outer repo: kept, the fixture would commit there.
+    const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_')));
+    if (fixture.commits) {
+      const git = (...gitArgs: string[]) => {
+        const run = spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...gitArgs], { cwd: dir, env });
+        assert.equal(run.status, 0, `git ${gitArgs.join(' ')}: ${run.stderr}`);
+      };
+      git('init', '-q', '-b', 'base');
+      git('commit', '-q', '--allow-empty', '-m', 'base');
+      git('checkout', '-q', '-b', 'ticket');
+      for (const message of fixture.commits) git('commit', '-q', '--allow-empty', '-m', message);
+      args.push('base');
+    }
+    if (fixture.message !== undefined) {
+      writeFileSync(join(dir, 'COMMIT_EDITMSG'), fixture.message);
+      args.push('--message', 'COMMIT_EDITMSG');
+    }
+    const run = spawnSync(process.execPath, args, { cwd: dir, encoding: 'utf8', env });
     return { ok: run.status === 0, output: `${run.stdout}${run.stderr}` };
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -151,5 +183,64 @@ for (const line of unnamedMarks) {
     const { ok, output } = checkDesign(`${line}\n`);
     assert.ok(!ok, output);
     assert.match(output, /DESIGN\.md:1: /);
+  });
+}
+
+// A ticket the branch closes (`Refs #NN` in its commits or in the commit being made) is named nowhere in the docs.
+const STALE = '| Correct under concurrency | first-time setup tested, wipe races not yet (#54) |\n';
+
+test('fails on a ticket that a branch commit closes, in any wording, naming the line', () => {
+  const { ok, output } = checkDesign(STALE, '', { commits: ['S4-03: tests\n\nRefs #54'] });
+  assert.ok(!ok, output);
+  assert.match(output, /DESIGN\.md:1: names #54, which this branch closes/);
+});
+
+test('fails on a ticket that the commit being made closes', () => {
+  const { ok, output } = checkDesign(STALE, '', { message: 'S4-03: tests\n\nRefs #54\n' });
+  assert.ok(!ok, output);
+  assert.match(output, /DESIGN\.md:1: names #54/);
+});
+
+test('fails on a closed ticket in README.md too', () => {
+  const { ok, output } = checkDesign('', '', { readme: STALE, commits: ['S4-03: tests\n\nRefs #54'] });
+  assert.ok(!ok, output);
+  assert.match(output, /README\.md:1: names #54/);
+});
+
+for (const [label, commits] of [
+  ['another ticket', ['S4-02: tests\n\nRefs #53']],
+  ['no ticket: the number is only in a subject', ['S4 plan: tickets #53, #54, #55']],
+  ['a ticket whose number is a prefix', ['S4-99: tests\n\nRefs #5']],
+] as const) {
+  test(`accepts an open ticket's mark when the branch closes ${label}`, () => {
+    const { ok, output } = checkDesign(STALE, '', { commits });
+    assert.ok(ok, output);
+  });
+}
+
+// The README status names the slice ROADMAP.md marks in progress, or, with none, the last one done.
+const roadmap = (s3: string, s4: string) =>
+  `## S3: Storage\nStatus: ${s3} · Spec: #35\n\n## S4: Multi-tab\nStatus: ${s4} · Spec: #51\n`;
+
+for (const [slices, readme] of [
+  [roadmap('done', 'in progress'), '> Status: S4 in progress. Built: …'],
+  [roadmap('done', 'planned'), '> Status: S3 done. Built: …'],
+] as const) {
+  test(`accepts README "${readme}" against its roadmap`, () => {
+    const { ok, output } = checkDesign('', '', { roadmap: slices, readme });
+    assert.ok(ok, output);
+  });
+}
+
+for (const [slices, readme] of [
+  [roadmap('done', 'in progress'), '> Status: S2 in progress. Built: …'],
+  [roadmap('done', 'in progress'), '> Status: S3 done. Built: …'],
+  [roadmap('done', 'planned'), '> Status: S3 in progress. Built: …'],
+  [roadmap('done', 'in progress'), '> Built: …'],
+] as const) {
+  test(`fails README "${readme}" against its roadmap`, () => {
+    const { ok, output } = checkDesign('', '', { roadmap: slices, readme });
+    assert.ok(!ok, output);
+    assert.match(output, /README\.md: says ".*", ROADMAP\.md says "Status: S\d (in progress|done)"/);
   });
 }
