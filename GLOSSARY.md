@@ -39,3 +39,11 @@ _Avoid_: bridge, host, wrapper
 **Empty vault**:
 A vault that holds no keys and no protection. A vault never used, wiped, or evicted by the browser is empty, and the three can't be told apart.
 _Avoid_: new vault, wiped vault, evicted vault (as distinct states)
+
+**Context**:
+A tab or frame of the vault's origin that has the vault open. Several contexts may use one vault at once; each opened vault in a page counts as one.
+_Avoid_: session, client, instance (for a tab)
+
+**Change notification**:
+A hint to a context that the vault may have changed, so it reads the vault again. It says only that something changed, not what. It can be lost or forged; the stored vault is the only truth.
+_Avoid_: event (alone), sync, update message
