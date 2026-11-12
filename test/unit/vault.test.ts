@@ -316,6 +316,54 @@ describe.each(keyTypeCases)('$type', ({ type, publicKeyLength, signatureLength, 
       expect(keys).toHaveLength(2);
     });
 
+    // Clearing site data, eviction and another tab's deleteDatabase all delete the database under an open vault.
+    test('a database deleted while the vault is open is an empty vault: list returns no keys and generate creates a new vault', async () => {
+      const { scope, name } = await openVault();
+      const old = await scope.generate(type);
+      const oldHeader = await readHeader(name);
+
+      await done(indexedDB.deleteDatabase(name)); // `done` rejects if the vault's connection blocks it
+
+      expect(await scope.list()).toEqual([]);
+      const key = await scope.generate(type);
+      expect(await scope.list()).toEqual([key]);
+      expect(key.id).not.toBe(old.id);
+      expect(await verify(key.publicKey, (await scope.sign(key, message)).bytes, message)).toBe(true);
+      const { meta, keys } = await readAll(name);
+      expect(meta).toHaveLength(1);
+      expect(keys).toHaveLength(1);
+      expect((await readHeader(name)).wrappingPublicKey).not.toEqual(oldHeader.wrappingPublicKey);
+    });
+
+    test('a generate whose key was sealed before the database was deleted is redone: one key, sealed to the new header', async () => {
+      const { scope, name } = await openVault();
+      await scope.generate(type);
+      const oldHeader = await readHeader(name);
+      const generate = keyTypes[type].generate;
+      const spy = vi.spyOn(keyTypes[type], 'generate').mockImplementationOnce(async () => {
+        const generated = await generate();
+        return {
+          ...generated,
+          // Sealed to the old header; the database goes before the write transaction starts.
+          seal: async (cipher) => {
+            const sealed = await generated.seal(cipher);
+            await done(indexedDB.deleteDatabase(name));
+            return sealed;
+          },
+        };
+      });
+
+      const key = await scope.generate(type);
+
+      expect(spy).toHaveBeenCalledTimes(2); // the first attempt's write failed its header check
+      expect(await scope.list()).toEqual([key]);
+      expect(await verify(key.publicKey, (await scope.sign(key, message)).bytes, message)).toBe(true);
+      const { meta, keys } = await readAll(name);
+      expect(meta).toHaveLength(1);
+      expect(keys).toHaveLength(1);
+      expect((await readHeader(name)).wrappingPublicKey).not.toEqual(oldHeader.wrappingPublicKey);
+    });
+
     test('a closed vault rejects every call', async () => {
       const { vault, scope } = await openVault();
       const key = await scope.generate(type);
