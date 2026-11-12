@@ -358,7 +358,7 @@ A key type whose private key Vault generates and stores sealed implements a smal
 
 secp256k1 is pinned by known answers. A published deterministic-ECDSA vector (bitcoinjs-lib's `ecdsa.json`, private key 1) is reproduced exactly through the public API, from a record planted with that private key: `storage › secp256k1 › a published deterministic-ECDSA vector is reproduced exactly`. A stored secp256k1 record lists and gives a fixed signature: `records › format: secp256k1 known answer › a stored secp256k1 key record lists and gives the expected signature`. Every signature is low-S, checked with plain integer arithmetic, not the curve library: `vault › every secp256k1 signature is low-S, checked without the curve library`. OpenSSL verifies a demo signature in Node: `e2e › demo creates, lists, signs, deletes and wipes keys of each type…`.
 
-The interface covers key types without a sealed part, whose private key stays in an authenticator, but passkey keys are not built yet: not tested yet: #66. An older build reads a record of a type it doesn't know as `incompatible`, so adding a type needs no version bump (§4.3). Registered names are well-formed for this: `key-types › every registered key type name is well-formed…`.
+The interface covers key types without a sealed part, whose private key stays in an authenticator, but passkey keys, the first such type, are not built yet (#66). An older build reads a record of a type it doesn't know as `incompatible`, so adding a type needs no version bump (§4.3). Registered names are well-formed for this: `key-types › every registered key type name is well-formed…`.
 
 ## 8. Browser support and degradation
 

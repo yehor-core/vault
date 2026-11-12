@@ -43,7 +43,7 @@ export interface KeyFields {
   readonly label?: string;
 }
 
-/** A `keys` record, keyed by [scope, id]: the common fields, then its key type's own part, opaque to the core (D-27). */
+/** A `keys` record, keyed by [scope, id]: the common fields, then its key type's own part, opaque to the core. */
 export type KeyRecord = KeyFields & Readonly<Fields>;
 
 /** The fields of a key record that are not its type's own. */

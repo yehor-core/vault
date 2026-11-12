@@ -44,7 +44,7 @@ export type AddableKeyTypeName = {
 /** The member of `Signature` that key type `T` returns, besides its `type`. */
 export type SignatureOf<T extends KeyTypeName> = Awaited<ReturnType<(typeof keyTypes)[T]['sign']>>;
 
-/** Key type `name`, as the core sees every type: its record part and its signature are its own. */
+/** Key type `name`, widened to `KeyType`: the core calls any type alike, its record part and signature opaque. */
 export function keyType(name: KeyTypeName): KeyType {
   return keyTypes[name];
 }

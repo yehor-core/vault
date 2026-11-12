@@ -121,8 +121,9 @@ export class Scope {
     const { header, record } = await this.#loadKey(id);
     if (record.type !== type) throw typeMismatch(id, record.type);
     const signature = await keyType(record.type).sign(record, header, message);
-    // `as`: the runtime check above makes record.type K['type'], and its key type returned its own member.
-    return { type: record.type, ...signature } as Signature<K['type']>;
+    // `type` last, so the member can't replace it. The runtime check above makes record.type K['type'], and that
+    // type returned its own member. `as`: TypeScript can't follow either through keyType().
+    return { ...signature, type: record.type } as Signature<K['type']>;
   }
 
   /** Deletes `key`, read like `sign` reads it. Deleting a missing key is a no-op. */

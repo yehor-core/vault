@@ -1,9 +1,8 @@
 import { isBytes, isString, isUint, type Bytes } from './bytes.ts';
 import { VaultError } from './errors.ts';
 
-// Field readers. Everything read from IndexedDB is untrusted: each reader checks one field, never coerces,
-// and names the field when it fails. The core reads the fields every record has (`records.ts`); a key type
-// reads its own part of a key record with the same readers.
+// Field readers for everything read from IndexedDB, which is untrusted: each checks one field, never coerces,
+// and names the field when it fails. The core and the key types build their parsers from them.
 
 export type Fields = Record<string, unknown>;
 
