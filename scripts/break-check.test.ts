@@ -4,7 +4,7 @@
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -37,7 +37,7 @@ function breakCheck(
   args: string[],
   batch?: unknown,
   fakeRed = '',
-): { status: number | null; output: string; code: string } {
+): { status: number | null; output: string; code: string; log: string } {
   const dir = mkdtempSync(join(tmpdir(), 'break-check-'));
   try {
     mkdirSync(join(dir, 'src'));
@@ -54,6 +54,7 @@ function breakCheck(
       status: run.status,
       output: `${run.stdout}${run.stderr}`,
       code: readFileSync(join(dir, 'src/code.ts'), 'utf8'),
+      log: existsSync(join(dir, 'break-check.log')) ? readFileSync(join(dir, 'break-check.log'), 'utf8') : '',
     };
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -105,6 +106,20 @@ test('--batch: runs every break alone and exits 0 only if each went red', () => 
   assert.equal(one.status, 1, one.output);
   assert.match(one.output, /1 of 2 breaks not red/);
   assert.equal(one.code, CODE);
+});
+
+// The log is the evidence a reviewer reads: each break with its replacement, its result per engine, and the verdict.
+test('every run appends each break and its results to break-check.log', () => {
+  const red = { file: 'src/code.ts', text: 'true', replacement: 'BROKEN', test: 'test/types.test.ts', typecheck: true };
+  const single = breakCheck(typecheckBreak('BROKEN'));
+  assert.match(
+    single.log,
+    /^# \d{4}-\d\d-\d\dT.*\n== src\/code\.ts: "true" → "BROKEN"\nred in typecheck: test\/types\.test\.ts\n/m,
+  );
+
+  const batch = breakCheck(['--batch', 'breaks.json'], [red, { ...red, replacement: 'false' }]);
+  assert.match(batch.log, /== src\/code\.ts: "true" → "false"\nNOT red in typecheck: it passed\n/);
+  assert.match(batch.log, /1 of 2 breaks not red\n$/);
 });
 
 const vitestBreak = ['src/code.ts', 'true', 'false', 'test/unit/code.test.ts', 'the guarded test'];

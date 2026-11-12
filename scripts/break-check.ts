@@ -14,7 +14,7 @@
 // Exit 0 means every break went red; exit 1 means one went unnoticed (or no test matched); exit 2 is a usage error.
 
 import { spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 
 interface Break {
   readonly file: string;
@@ -62,6 +62,14 @@ function parseArgs(args: string[]): Break[] {
   return [{ file, text, replacement, test, pattern, engine }];
 }
 
+// Every result line also goes to break-check.log (git-ignored), appended per run: the evidence the PR and the reviewer read.
+const LOG = 'break-check.log';
+
+function report(line: string, print = true): void {
+  if (print) console.log(line);
+  appendFileSync(LOG, `${line}\n`);
+}
+
 let restore = () => {};
 process.on('SIGINT', () => {
   restore();
@@ -92,11 +100,11 @@ function typecheckRed(spec: Break): boolean {
   const output = `${run.stdout}${run.stderr}`;
   const errors = output.split('\n').filter((line) => line.includes(spec.test) && /error/.test(line));
   if (run.status !== 0 && errors.length > 0) {
-    console.log(`red in typecheck: ${spec.test}`);
-    for (const line of errors) console.log(`  ${line.trim()}`);
+    report(`red in typecheck: ${spec.test}`);
+    for (const line of errors) report(`  ${line.trim()}`);
     return true;
   }
-  console.log(`NOT red in typecheck: ${run.status === 0 ? 'it passed' : `no error in ${spec.test}`}`);
+  report(`NOT red in typecheck: ${run.status === 0 ? 'it passed' : `no error in ${spec.test}`}`);
   return false;
 }
 
@@ -118,11 +126,11 @@ function vitestRedIn(spec: Break, engine: string): boolean {
       .find((line) => /^\s*Tests\s/.test(line))
       ?.trim() ?? 'no test summary';
   if (/Tests\s+\d+ failed/.test(output)) {
-    console.log(`red in ${engine}: ${summary}`);
-    for (const line of output.split('\n').filter((l) => l.includes('×'))) console.log(`  ${line.trim()}`);
+    report(`red in ${engine}: ${summary}`);
+    for (const line of output.split('\n').filter((l) => l.includes('×'))) report(`  ${line.trim()}`);
     return true;
   }
-  console.log(`NOT red in ${engine}: ${summary}`);
+  report(`NOT red in ${engine}: ${summary}`);
   return false;
 }
 
@@ -133,22 +141,23 @@ function playwrightRedIn(spec: Break, engine: string): boolean {
   // As with vitest: "No tests found" also exits non-zero, so only a failed count is red.
   const failed = lines.find((line) => /^\s*\d+ failed/.test(line));
   if (failed) {
-    console.log(`red in ${engine}: ${failed.trim()}`);
-    for (const line of lines.filter((l) => /^\s*✘/.test(l))) console.log(`  ${line.trim()}`);
+    report(`red in ${engine}: ${failed.trim()}`);
+    for (const line of lines.filter((l) => /^\s*✘/.test(l))) report(`  ${line.trim()}`);
     return true;
   }
   const summary = lines.find((line) => /^\s*\d+ passed/.test(line))?.trim() ?? 'no test summary';
-  console.log(`NOT red in ${engine}: ${summary}`);
+  report(`NOT red in ${engine}: ${summary}`);
   return false;
 }
 
 const breaks = parseArgs(process.argv.slice(2));
+report(`# ${new Date().toISOString()}`, false);
 let notRed = 0;
 for (const spec of breaks) {
-  if (breaks.length > 1)
-    console.log(`== ${spec.file}: ${JSON.stringify(spec.text)} → ${JSON.stringify(spec.replacement)}`);
+  // A single break prints no header: its command line says it. The log holds many runs, so it always gets one.
+  report(`== ${spec.file}: ${JSON.stringify(spec.text)} → ${JSON.stringify(spec.replacement)}`, breaks.length > 1);
   if (!breakOnce(spec)) notRed++;
 }
 if (breaks.length > 1)
-  console.log(notRed === 0 ? `all ${breaks.length} breaks red` : `${notRed} of ${breaks.length} breaks not red`);
+  report(notRed === 0 ? `all ${breaks.length} breaks red` : `${notRed} of ${breaks.length} breaks not red`);
 process.exitCode = notRed === 0 ? 0 : 1;

@@ -13,7 +13,9 @@ const SCRIPT = join(import.meta.dirname, 'check-test-refs.ts');
 const UNIT = `
 describe('group', () => {
   test('a real test', () => {});
+  /x/.test(source); // a method named test, not a test call
   test.each(cases)('editing $field fails closed', () => {});
+  test.each<[key: string, named: string[]]>([['a', ['b']]])('typed cases are named: %s', () => {});
 });
 describe.each(cases)('$type', () => {
   test('a test in every case', () => {});
@@ -21,13 +23,13 @@ describe.each(cases)('$type', () => {
 `;
 const E2E = `test('the demo works', async () => {});`;
 
-/** Runs check:refs in a fixture repo whose DESIGN.md cites `citation`. */
-function checkRefs(citation: string): { ok: boolean; output: string } {
+/** Runs check:refs in a fixture repo whose DESIGN.md cites `citation`, with `extraUnit` appended to the unit tests. */
+function checkRefs(citation: string, extraUnit = ''): { ok: boolean; output: string } {
   const dir = mkdtempSync(join(tmpdir(), 'check-refs-'));
   try {
     mkdirSync(join(dir, 'test/unit'), { recursive: true });
     mkdirSync(join(dir, 'test/e2e'), { recursive: true });
-    writeFileSync(join(dir, 'test/unit/vault.test.ts'), UNIT);
+    writeFileSync(join(dir, 'test/unit/vault.test.ts'), UNIT + extraUnit);
     writeFileSync(join(dir, 'test/e2e/demo.spec.ts'), E2E);
     writeFileSync(join(dir, 'DESIGN.md'), `| A claim | \`${citation}\` |\n`);
     writeFileSync(join(dir, 'README.md'), '');
@@ -43,6 +45,7 @@ const resolving = [
   'vault › group › a real test',
   'vault › a real…',
   'vault › editing <field> fails closed',
+  'vault › typed cases are named: <case>',
   'vault › a test in every case',
   'e2e › the demo works',
 ];
@@ -68,3 +71,10 @@ for (const citation of failing) {
     assert.ok(!ok, output);
   });
 }
+
+// A call whose title the pattern can't read would drop out of the index unseen, and its citations read as missing.
+test('fails, naming file and line, on a test call whose title it cannot read', () => {
+  const { ok, output } = checkRefs('vault › a real test', "\ntest.each(f(g(h())))('too deep', () => {});\n");
+  assert.ok(!ok, output);
+  assert.match(output, /test\/unit\/vault\.test\.ts:12: /);
+});
