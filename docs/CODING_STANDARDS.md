@@ -13,7 +13,7 @@ Checked by `/code-review` against every diff. Rules marked _(oxlint)_ or _(tsc)_
 
 ## Untrusted input
 
-- Everything read from IndexedDB is untrusted. Parse it with the typed readers in `src/records.ts` into new objects: check each field's type and length, never coerce, reject unknown fields, and name the failing field in the error.
+- Everything read from IndexedDB is untrusted. Parse it with the typed readers in `src/readers.ts` and `src/records.ts` into new objects: check each field's type and length, never coerce, reject unknown fields, and name the failing field in the error.
 - A failed check fails the whole call closed with `corrupted`; the one exception is a well-formed key type this build doesn't know, which is `incompatible` (D-21). Vault never repairs: no code path writes back a record it failed to read.
 - Caller input that could silently change meaning is checked, not coerced (e.g. `sign` data must be a `Uint8Array`). A malformed argument is a `TypeError`.
 

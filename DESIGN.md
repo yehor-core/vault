@@ -134,7 +134,9 @@ Code layout:
 - `src/db.ts`: opening the database, and the transaction helper.
 - `src/connection.ts`: the one connection a vault and its scopes share; closing it ends them all.
 - `src/storage.ts`: record access inside a transaction, store names, scope ranges. No crypto.
-- `src/records.ts`: the format, parsing and validation.
+- `src/readers.ts`: the typed field readers every parser is built from.
+- `src/records.ts`: the format, parsing and validation of the fields every record has.
+- `src/key-types.ts`, `src/key-types/`: the key-type interface, its registry and the key types; `sealed.ts` is the record part, AAD and signing shared by sealed key types.
 - `src/seal.ts`: sealing.
 - `src/scope.ts`: the key operations of one scope (`generate`, `list`, `sign`, `delete`).
 - `src/vault.ts`: the vault-wide operations (`open`, `scope`, `wipe`, `close`).
@@ -155,7 +157,7 @@ Code layout:
 | Object stores other than `meta` and `keys` are ignored, at `open` and later: Vault never reads them, so they can't mislead it, and rejecting one would leave a vault that `wipe()`, which clears only Vault's stores, can't recover | never checked | none: `records › foreign records › an object store that is not Vault’s is ignored…` |
 | A version-1 database has Vault's stores | `open` | `corrupted`: `vault › a database without Vault stores…` |
 
-Each field is read by a typed reader (`src/records.ts`), and the error names the field that failed, e.g. `Corrupted storage: key.sealed.iv`: `records › a malformed header field… / a malformed key record field…`. The parsers return new objects built from the read values, never the stored object. The typed encoding is a backstop, not a second classified check. If a reader check were ever missing, encoding the field for the id or the AAD throws a `TypeError` and the call fails instead of accepting the record; such a failure is not classified as `corrupted`. Vault never repairs: no code path writes back a record it failed to read. A failed check rejects the whole call, so `list()` fails if any key in the scope is bad. A stored scope name that `vault.scope()` would refuse lies outside every scope's key range, so no call reads it; the parser rejects it anyway (`key.scope`).
+Each field is read by a typed reader (`src/readers.ts`, `src/records.ts`), and the error names the field that failed, e.g. `Corrupted storage: key.sealed.iv`: `records › a malformed header field… / a malformed key record field…`. The parsers return new objects built from the read values, never the stored object. The typed encoding is a backstop, not a second classified check. If a reader check were ever missing, encoding the field for the id or the AAD throws a `TypeError` and the call fails instead of accepting the record; such a failure is not classified as `corrupted`. Vault never repairs: no code path writes back a record it failed to read. A failed check rejects the whole call, so `list()` fails if any key in the scope is bad. A stored scope name that `vault.scope()` would refuse lies outside every scope's key range, so no call reads it; the parser rejects it anyway (`key.scope`).
 
 ### 4.3 Versioning and migration
 
@@ -327,32 +329,36 @@ Programming errors are not `VaultError`. Use after `close()`, including a call s
 
 ### 7.5 Adding a key type
 
-A new sealed key type is one module in `src/key-types/` that implements `KeyType`, and one entry in the `keyTypes` registry (`src/key-types.ts`). Nothing in the core changes: `KeyTypeName`, `KeyInfo` and `Signature` gain its member from the registry, and the core reaches type-specific behaviour only through the interface. A test reads the source of every other file in `src/` and fails if one names a registered key type: `key-types › no core file names a registered key type`. Every test about keys runs once per registered type, from one table of type-specific inputs in `test/unit/helpers.ts`.
+A new key type is one module in `src/key-types/` that implements `KeyType`, and one entry in the `keyTypes` registry (`src/key-types.ts`). Nothing in the core changes: `KeyTypeName`, `KeyInfo` and `Signature` gain its member from the registry, and the core reaches type-specific behaviour only through the interface. A key type owns its part of the key record (the fields beside the common ones, and their parser), its public-key check, its member of `Signature` and whether it can add an existing key; the core assumes neither a sealed private key nor a signature shape. A test reads the source of every other file in `src/` and fails if one names a registered key type: `key-types › no core file names a registered key type`. Every test about keys runs once per registered type, from one table of type-specific inputs in `test/unit/helpers.ts`.
 
 ```ts
-interface KeyType {
-  isPublicKey(bytes: Uint8Array): boolean;   // run by list() on every stored key, without any secret
-  generate(): Promise<GeneratedKey>;
-  sign(sealed: Uint8Array, cipher: Cipher, data: Uint8Array): Promise<Uint8Array>;
-  verify(publicKey: Uint8Array, signature: Uint8Array, data: Uint8Array): Promise<boolean>;
+interface KeyType<Part, Sig> {
+  canAdd: boolean;                           // whether a key can be added to a vault that has never seen it
+  fields: string[];                          // the record fields this type owns, beside the common ones
+  parse(record): Part;                       // reads them; run by list() on every stored key, without any secret
+  isPublicKey(bytes: Uint8Array): boolean;   // likewise
+  generate(): Promise<NewKey<Part>>;
+  sign(record: KeyFields & Part, header, data: Uint8Array): Promise<Sig>;   // checks the signature before returning it
 }
-interface GeneratedKey {
+interface NewKey<Part> {
   publicKey: Uint8Array;
-  seal(cipher: Cipher): Promise<ArrayBuffer>;
+  part(fields: KeyFields, header): Promise<Part>;   // this key's part of its record, in the vault of `header`
   erase(): void;   // called once the key is stored or abandoned, on every path of generate
 }
 ```
+
+A key type whose private key Vault generates and stores sealed implements a smaller `SealedScheme` (`isPublicKey`, `generate`, `sign` over a sealed private key and a `Cipher`, `verify`), and `sealedKeyType` (`src/key-types/sealed.ts`) makes it a `KeyType`: its record part is `sealed`, bound to the common fields by the AAD, and its signature member is `{ bytes }`. No registered type can add an existing key yet, so `Scope` has no add operation: `vault › no registered key type can add an existing key…`.
 
 | Key type | Public key | Signature |
 |---|---|---|
 | `ed25519` | 32 bytes, canonical RFC 8032 encoding of a point not of small order | 64 bytes, RFC 8032, over the exact bytes passed to `sign` |
 | `secp256k1` | 33 bytes, compressed SEC1 point, checked to be on the curve | 64 bytes r ‖ s: ECDSA over SHA-256 of the bytes passed to `sign`, RFC 6979 nonces, low-S, no recovery id |
 
-The core hands the type an AES-GCM key bound to the record (`Cipher`), and the type decides how its private key is sealed: ed25519 uses `wrapKey` (`src/key-types/ed25519.ts`), so it has no secret buffer to erase. secp256k1 encrypts its raw 32-byte scalar with `encrypt` and erases it (`src/key-types/secp256k1.ts`); the type name means exactly this scheme, and another scheme on the curve would be another type.
+`sealedKeyType` hands the scheme an AES-GCM key bound to the record (`Cipher`), and the scheme decides how its private key is sealed: ed25519 uses `wrapKey` (`src/key-types/ed25519.ts`), so it has no secret buffer to erase. secp256k1 encrypts its raw 32-byte scalar with `encrypt` and erases it (`src/key-types/secp256k1.ts`); the type name means exactly this scheme, and another scheme on the curve would be another type.
 
 secp256k1 is pinned by known answers. A published deterministic-ECDSA vector (bitcoinjs-lib's `ecdsa.json`, private key 1) is reproduced exactly through the public API, from a record planted with that private key: `storage › secp256k1 › a published deterministic-ECDSA vector is reproduced exactly`. A stored secp256k1 record lists and gives a fixed signature: `records › format: secp256k1 known answer › a stored secp256k1 key record lists and gives the expected signature`. Every signature is low-S, checked with plain integer arithmetic, not the curve library: `vault › every secp256k1 signature is low-S, checked without the curve library`. OpenSSL verifies a demo signature in Node: `e2e › demo creates, lists, signs, deletes and wipes keys of each type…`.
 
-The claim holds for sealed key types only: the core may assume that every key record has a sealed part and every signature is a type name with bytes. Passkey keys have neither, so adding them widens the interface and changes the core once. An older build reads a record of a type it doesn't know as `incompatible`, so adding a type needs no version bump (§4.3). Registered names are well-formed for this: `key-types › every registered key type name is well-formed…`.
+The interface covers key types without a sealed part, whose private key stays in an authenticator, but passkey keys, the first such type, are not built yet (#66). An older build reads a record of a type it doesn't know as `incompatible`, so adding a type needs no version bump (§4.3). Registered names are well-formed for this: `key-types › every registered key type name is well-formed…`.
 
 ## 8. Browser support and degradation
 

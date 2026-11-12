@@ -1,5 +1,6 @@
 import { request, type Store } from './db.ts';
-import { corrupted, parseHeader, type HeaderRecord, type KeyRecord } from './records.ts';
+import { corrupted } from './readers.ts';
+import { parseHeader, type HeaderRecord, type KeyRecord } from './records.ts';
 
 // Record-level access inside a transaction; no crypto. Writes are not awaited: a failed request aborts
 // the transaction, which transact() reports.

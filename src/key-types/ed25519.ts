@@ -1,6 +1,6 @@
 import { ed25519 as curve } from '@noble/curves/ed25519.js';
 import type { Bytes } from '../bytes.ts';
-import type { KeyType } from '../key-types.ts';
+import { sealedKeyType } from './sealed.ts';
 
 // WebKit fails ~0.7% of generations, independently: all 5 attempts fail with p ≈ 0.007⁵ ≈ 2·10⁻¹¹ (3 would be
 // ≈ 3·10⁻⁷, once per ~3 million keys), and a persistent failure still surfaces quickly as 'unavailable'.
@@ -14,7 +14,7 @@ const VERIFY_OPTIONS = { zip215: false } as const;
  * encoding; a signature is 64 bytes, over the exact bytes passed to `sign`. The private key travels only as
  * a CryptoKey, never as JS bytes; verification handles only public data.
  */
-export const ed25519: KeyType = {
+export const ed25519 = sealedKeyType({
   isPublicKey,
 
   async generate() {
@@ -36,7 +36,7 @@ export const ed25519: KeyType = {
   async verify(publicKey, signature, data) {
     return curve.verify(signature, data, publicKey, VERIFY_OPTIONS);
   },
-};
+});
 
 /**
  * A canonical RFC 8032 point encoding (y < p, no x = 0 with the sign bit set) of a point outside the

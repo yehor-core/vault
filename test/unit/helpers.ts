@@ -165,10 +165,10 @@ export async function openContexts(): Promise<[Context, Context]> {
  * resolves once the call is held; `release` lets it go on. Later calls pass. Restored by vi.restoreAllMocks.
  */
 export function holdGenerate(type: KeyTypeName): { reached: Promise<void>; release: () => void } {
-  const generate = keyTypes[type].generate;
+  const generate = keyTypes[type].scheme.generate;
   const reached = Promise.withResolvers<void>();
   const gate = Promise.withResolvers<void>();
-  vi.spyOn(keyTypes[type], 'generate').mockImplementationOnce(async () => {
+  vi.spyOn(keyTypes[type].scheme, 'generate').mockImplementationOnce(async () => {
     const generated = await generate();
     reached.resolve();
     await gate.promise;
