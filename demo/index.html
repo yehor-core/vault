@@ -50,11 +50,17 @@
         <select id="type">
           <option>ed25519</option>
           <option>secp256k1</option>
+          <option>passkey</option>
         </select></label
       >
       <label>Label <input id="label" placeholder="optional" maxlength="256" /></label>
       <button id="generate">Generate key</button>
+      <button id="add">Add existing passkey</button>
       <button id="wipe">Wipe vault</button>
+    </p>
+    <p>
+      A passkey key prompts your browser's passkey dialog. Add existing passkey asks for a passkey made for this scope
+      elsewhere, such as another browser profile; it prompts twice.
     </p>
     <p>
       <label>Message to sign <input id="message" value="hello, vault" size="40" /></label>
@@ -66,6 +72,7 @@
           <th>Id</th>
           <th>Label</th>
           <th>Type</th>
+          <th>Credential id</th>
           <th>Public key</th>
           <th>Created</th>
           <th></th>
@@ -75,7 +82,10 @@
     </table>
 
     <h2>Last signature</h2>
-    <p>Verified with the public key only, outside Vault: ed25519 with WebCrypto, secp256k1 with @noble/curves.</p>
+    <p>
+      Verified with the public key only, outside Vault: ed25519 with WebCrypto, secp256k1 with @noble/curves, a passkey
+      assertion as a WebAuthn relying party checks it, with WebCrypto.
+    </p>
     <pre id="output">—</pre>
 
     <script type="module" src="./main.ts"></script>

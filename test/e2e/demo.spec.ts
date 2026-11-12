@@ -3,6 +3,17 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { openDemo } from './contexts.ts';
+import {
+  addVirtualAuthenticator,
+  CHROMIUM_ONLY,
+  freshDevice,
+  listPasskeys,
+  openWithAuthenticator,
+  shortenPromptTimeouts,
+  verifiesOutsideVault,
+  type PageAssertion,
+} from './passkeys.ts';
 
 function fromHex(hex: string | null): Uint8Array<ArrayBuffer> {
   if (hex === null) throw new Error('attribute missing');
@@ -157,4 +168,186 @@ test('the dev demo exposes Vault to the console: a key generated there is listed
   await expect(page.getByRole('cell', { name: 'from the console', exact: true })).toHaveCount(1);
   await page.click('#wipe');
   await expect(page.locator('#keys tr')).toHaveCount(0);
+});
+
+/** The assertion the demo shows in #output after signing with a passkey key. */
+async function shownAssertion(page: Page): Promise<PageAssertion> {
+  const output = page.locator('#output');
+  const bytes = async (name: string) => Array.from(fromHex(await output.getAttribute(name)));
+  return {
+    authenticatorData: await bytes('data-authenticator-data'),
+    clientDataJSON: await bytes('data-client-data-json'),
+    signature: await bytes('data-signature'),
+  };
+}
+
+test('demo generates a labelled passkey key, lists it with its type, label and credential id, and signs with it', async ({
+  context,
+  browserName,
+}) => {
+  const { page } = await openWithAuthenticator(context, browserName);
+  const rows = page.locator('#keys tr');
+  await page.fill('#label', 'Laptop passkey');
+  await generate(page, 'passkey');
+  await expect(rows).toHaveCount(1);
+  await expect(page.locator('#status')).toHaveText('Ready');
+  const [key] = await listPasskeys(page);
+  if (!key) throw new Error('no passkey key listed');
+  const row = rows.nth(0);
+  await expect(row).toHaveAttribute('data-type', 'passkey');
+  await expect(row.getByRole('cell', { name: 'passkey', exact: true })).toHaveCount(1);
+  await expect(row.getByRole('cell', { name: 'Laptop passkey', exact: true })).toHaveCount(1);
+  const credentialId = await row.getAttribute('data-credential-id');
+  expect(Array.from(fromHex(credentialId))).toEqual(key.credentialId);
+  await expect(row.getByRole('cell').nth(3)).toHaveText(`${credentialId?.slice(0, 16)}…`); // the Credential id column
+
+  const message = 'signed with a passkey in the demo';
+  await page.fill('#message', message);
+  await row.getByRole('button', { name: 'Sign' }).click();
+  const output = page.locator('#output');
+  await expect(output).toHaveAttribute('data-type', 'passkey');
+  await expect(output).toHaveAttribute('data-verified', 'true');
+  const assertion = await shownAssertion(page);
+  const origin = new URL(page.url()).origin;
+  expect(verifiesOutsideVault(key.publicKey, assertion, message, origin)).toBe(true);
+  expect(verifiesOutsideVault(key.publicKey, assertion, 'another message', origin)).toBe(false);
+});
+
+test('demo adds an existing passkey key in a fresh browser context, with the id and credential id generate gave it, and signs with it', async ({
+  context,
+  browser,
+  browserName,
+}) => {
+  const { page, authenticator } = await openWithAuthenticator(context, browserName);
+  await page.fill('#label', 'made elsewhere');
+  await generate(page, 'passkey');
+  await expect(page.locator('#keys tr')).toHaveCount(1);
+  const generated = page.locator('#keys tr').nth(0);
+  const id = await generated.getAttribute('data-id');
+  const credentialId = await generated.getAttribute('data-credential-id');
+
+  const device = await freshDevice(browser, browserName, await authenticator.passkeys());
+  try {
+    const rows = device.page.locator('#keys tr');
+    await expect(rows).toHaveCount(0);
+    await device.page.fill('#label', 'added here');
+    await device.page.click('#add');
+    await expect(rows).toHaveCount(1);
+    await expect(device.page.locator('#status')).toHaveText('Ready');
+    const added = rows.nth(0);
+    await expect(added).toHaveAttribute('data-type', 'passkey');
+    await expect(added).toHaveAttribute('data-id', id ?? '');
+    await expect(added).toHaveAttribute('data-credential-id', credentialId ?? '');
+    await expect(added.getByRole('cell', { name: 'added here', exact: true })).toHaveCount(1);
+
+    const [key] = await listPasskeys(device.page);
+    if (!key) throw new Error('no passkey key listed');
+    const message = 'signed on the fresh device';
+    await device.page.fill('#message', message);
+    await added.getByRole('button', { name: 'Sign' }).click();
+    await expect(device.page.locator('#output')).toHaveAttribute('data-verified', 'true');
+    const assertion = await shownAssertion(device.page);
+    expect(verifiesOutsideVault(key.publicKey, assertion, message, new URL(device.page.url()).origin)).toBe(true);
+  } finally {
+    await device.context.close();
+  }
+});
+
+/**
+ * Counts the page's WebAuthn calls, and records for each button click how many the button's `onclick` handler
+ * started before it returned, so before its first await resumed. A listener after the handler would come too late:
+ * the browser runs pending microtasks between listeners, so an `await` of a settled promise would already have
+ * resumed. So a capturing listener wraps the button's handler for this one click. `atClicks()` is those counts.
+ */
+async function countPromptsAtClicks(page: Page): Promise<{ atClicks: () => Promise<number[]> }> {
+  await page.evaluate(() => {
+    let prompts = 0;
+    for (const method of ['create', 'get'] as const) {
+      const original = navigator.credentials[method].bind(navigator.credentials);
+      Object.assign(navigator.credentials, {
+        [method]: (options: CredentialCreationOptions & CredentialRequestOptions) => {
+          prompts++;
+          return original(options);
+        },
+      });
+    }
+    const atClicks: number[] = [];
+    document.addEventListener(
+      'click',
+      ({ target: button }) => {
+        if (!(button instanceof HTMLButtonElement)) return;
+        const handler = button.onclick;
+        if (!handler) return;
+        button.onclick = function (this: GlobalEventHandlers, event: PointerEvent) {
+          button.onclick = handler;
+          const before = prompts;
+          const returned: unknown = handler.call(this, event);
+          atClicks.push(prompts - before);
+          return returned;
+        };
+      },
+      { capture: true },
+    );
+    Object.assign(globalThis, { promptsAtClicks: atClicks });
+  });
+  return {
+    atClicks: () =>
+      page.evaluate(() => {
+        const { promptsAtClicks } = globalThis as Record<string, unknown>;
+        if (!Array.isArray(promptsAtClicks)) throw new Error('promptsAtClicks missing');
+        return promptsAtClicks.map(Number);
+      }),
+  };
+}
+
+test('each demo passkey control calls Vault first in its click handler, so the prompt starts within the click', async ({
+  context,
+  browserName,
+}) => {
+  const { page } = await openWithAuthenticator(context, browserName);
+  const status = page.locator('#status');
+  const rows = page.locator('#keys tr');
+  const prompts = await countPromptsAtClicks(page);
+  await generate(page, 'passkey');
+  await expect(rows).toHaveCount(1);
+  await expect(status).toHaveText('Ready');
+  await rows.nth(0).getByRole('button', { name: 'Sign' }).click();
+  await expect(page.locator('#output')).toHaveAttribute('data-verified', 'true');
+  await page.click('#add'); // the key this scope holds: one prompt, then returned as stored
+  await expect(status).toHaveText('Ready');
+  await expect(rows).toHaveCount(1);
+  expect(await prompts.atClicks()).toEqual([1, 1, 1]); // generate, sign, add: each started its prompt synchronously
+});
+
+test('a cancelled passkey prompt in the demo shows its error code, and the demo goes on working', async ({
+  context,
+  browserName,
+}, testInfo) => {
+  testInfo.skip(browserName !== 'chromium', CHROMIUM_ONLY);
+  const page = await openDemo(context);
+  const authenticator = await addVirtualAuthenticator(page);
+  const status = page.locator('#status');
+  const rows = page.locator('#keys tr');
+  await generate(page, 'passkey');
+  await expect(rows).toHaveCount(1);
+  await expect(status).toHaveText('Ready');
+
+  await authenticator.setPresence(false);
+  await shortenPromptTimeouts(page);
+  for (const click of [
+    () => page.click('#generate'),
+    () => page.click('#add'),
+    () => rows.nth(0).getByRole('button', { name: 'Sign' }).click(),
+  ]) {
+    await click();
+    await expect(status).toHaveText(/^VaultError cancelled: /);
+    await expect(status).toHaveClass('error');
+    await status.evaluate((element) => (element.textContent = 'reset')); // so the next error is a new one
+  }
+  await expect(rows).toHaveCount(1); // the cancelled generate and add stored nothing
+
+  await authenticator.setPresence(true);
+  await rows.nth(0).getByRole('button', { name: 'Sign' }).click();
+  await expect(page.locator('#output')).toHaveAttribute('data-verified', 'true');
+  await expect(status).toHaveText('Ready');
 });

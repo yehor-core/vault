@@ -117,6 +117,24 @@ export async function addVirtualAuthenticator(
   };
 }
 
+export const CHROMIUM_ONLY =
+  'Only Chromium’s virtual authenticator can decline a prompt or answer without user verification (D-62)';
+
+/** Gives every later passkey prompt of the page a 100 ms timeout: with presence off, it then ends as a declined one. */
+export async function shortenPromptTimeouts(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const credentials = navigator.credentials;
+    const create = credentials.create.bind(credentials);
+    const get = credentials.get.bind(credentials);
+    Object.assign(credentials, {
+      create: (options: CredentialCreationOptions) =>
+        create({ ...options, ...(options.publicKey && { publicKey: { ...options.publicKey, timeout: 100 } }) }),
+      get: (options: CredentialRequestOptions) =>
+        get({ ...options, ...(options.publicKey && { publicKey: { ...options.publicKey, timeout: 100 } }) }),
+    });
+  });
+}
+
 async function addCredential(session: CDPSession, authenticatorId: string, passkey: MovablePasskey): Promise<void> {
   await session.send('WebAuthn.addCredential', {
     authenticatorId,
