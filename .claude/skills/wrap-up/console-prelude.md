@@ -5,6 +5,7 @@ Copy this block into the report as its first `js` code block. The reader runs `n
 - `Vault`: the class itself, a global the dev demo sets (`demo/main.ts`).
 - `vault`: a second connection to the demo's database. Experiments use scopes of their own (`break-…`), so the demo's `demo` scope stays as it was until a `vault.wipe()`, which clears every scope; say so where a block calls it.
 - `editKey(scope, id, change)`: rewrites one stored key record with raw IndexedDB, as a storage writer would. DevTools can't edit IndexedDB values. `change` gets the stored record and returns the one to put; a changed `scope` or `id` writes a copy under the new key and leaves the original.
+- `meta(name, use)`: the same for the `meta` store, which holds the header, in the database `name`. `use` gets the store and may return a request; `meta` resolves to its result once the transaction completes: `await meta('vault', (store) => store.get('header'))`, `await meta('vault', (store) => store.put(value, 'header'))`.
 - `outcome(promise)`: `'ok'`, or the error's name, code and message, for printing what a call did.
 
 ```js
@@ -19,6 +20,18 @@ const editKey = (scope, id, change) =>
       const store = tx.objectStore('keys');
       store.get([scope, id]).onsuccess = (event) => store.put(change(event.target.result));
       tx.oncomplete = () => (db.close(), resolve());
+      tx.onerror = () => (db.close(), reject(tx.error));
+    };
+  });
+const meta = (name, use) =>
+  new Promise((resolve, reject) => {
+    const open = indexedDB.open(name);
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const db = open.result;
+      const tx = db.transaction('meta', 'readwrite');
+      const request = use(tx.objectStore('meta'));
+      tx.oncomplete = () => (db.close(), resolve(request?.result));
       tx.onerror = () => (db.close(), reject(tx.error));
     };
   });

@@ -24,7 +24,7 @@ Roadmap → slice → spec → tickets → one PR per ticket. I start each step.
 - One ticket = one branch = one PR. Before `/implement`, create `S<N>/<NN>-<short-name>` from an up-to-date `main`.
 - Commit messages reference the ticket (`Refs #<issue>`), so `/code-review` finds the spec.
 - In a new worktree, run `npm ci` once, before the first test run: it installs the dependencies, and its `prepare` script creates the git-ignored `.husky/_` that runs the pre-commit hook (D-26).
-- Claude Code hooks (`.claude/hooks/`) run from the main checkout, not the worktree: a merged change to them takes effect only after the main checkout is pulled. Tell me to pull it when such a PR merges.
+- Claude Code hooks and skills (`.claude/hooks/`, `.claude/skills/`) load from the main checkout, not the worktree: a merged change to them takes effect only after the main checkout is pulled. Tell me to pull it when such a PR merges. When the session-start hook says the checkout is behind, read the invoked skill from `origin/main` (`git show origin/main:<path>`) and follow that version.
 - To rebase a ticket branch onto `main`: `git rebase`, then `git push --force-with-lease`. The hook blocks a force-push without a lease and every push to `main`.
 - When the ticket is done: push, then `gh pr create`. Title `S<N>-<NN>: <ticket title>`. Body: `Closes #<issue>` first, then the `/pr` template, then a short `/code-review` summary.
 - The planning records of a slice (what steps 1–3 change in GLOSSARY.md, DECISIONS.md and ROADMAP.md) share one branch, `S<N>/00-plan`, and one PR, opened after `/to-tickets`, titled `S<N> plan: <summary>`.
