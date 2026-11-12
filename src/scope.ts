@@ -6,6 +6,7 @@ import { VaultError } from './errors.ts';
 import {
   isKeyTypeName,
   keyType,
+  type AddableKeyTypeName,
   type InfoOf,
   type KeyType,
   type KeyTypeName,
@@ -95,10 +96,7 @@ export class Scope {
    */
   async generate<T extends KeyTypeName>(type: T, options: GenerateOptions = {}): Promise<KeyInfo<T>> {
     if (!isKeyTypeName(type)) throw new TypeError(`Unknown key type: ${String(type)}`);
-    if (typeof options !== 'object' || options === null) throw new TypeError('options must be an object');
-    const { label } = options; // read once: a getter can't change between the check and the write
-    if (label !== undefined && !isLabel(label))
-      throw new TypeError(`A label is a well-formed string of 1 to ${MAX_LABEL_LENGTH} UTF-16 code units`);
+    const label = readLabelOption(options);
     const request: NewKeyRequest = { scope: this.#name, ...(label !== undefined && { label }) };
     const kind = keyType(type);
     const record = kind.prompts
@@ -107,6 +105,29 @@ export class Scope {
     if (!record) throw new VaultError('unavailable', 'The vault kept changing during generate');
     this.#changes.notify(); // once, after the commit that stored the key: a redone attempt wrote nothing
     // `as`: the record was made for `type`, checked above to be a registered name; TypeScript can't follow T through it.
+    return keyInfo(record) as KeyInfo<T>;
+  }
+
+  /**
+   * Adds a key that exists outside this vault, which the user presents: on a fresh device, in another profile, or
+   * after a wipe. Its prompt starts before any await. Returns the key with the id it has on every device; a key this
+   * scope holds already is returned as stored, and `label` is then ignored. A key of another scope is `not-found`.
+   */
+  async add<T extends AddableKeyTypeName>(type: T, options: GenerateOptions = {}): Promise<KeyInfo<T>> {
+    if (!isKeyTypeName(type)) throw new TypeError(`Unknown key type: ${String(type)}`);
+    const kind = keyType(type);
+    if (!kind.canAdd) throw new TypeError(`A key of type ${type} can't be added, only generated`);
+    const label = readLabelOption(options);
+    const pending = fromKeyType(kind.add(this.#name), 'The browser failed to find the key'); // the prompt, before any await
+    const presented = await pending;
+    const id = await keyId(this.#name, type, presented.identity);
+    let record = await this.#findKey(id); // D-57: a key the scope holds takes no second prompt and no write
+    if (!record) {
+      const completed = fromKeyType(presented.complete(), 'The browser failed to find the key');
+      record = await this.#storeAsIs(type, label, completed);
+      this.#changes.notify();
+    }
+    // `as`: the record is of `type`, checked above to be a registered name; TypeScript can't follow T through it.
     return keyInfo(record) as KeyInfo<T>;
   }
 
@@ -164,6 +185,15 @@ export class Scope {
     if (typeof id !== 'string') throw new TypeError('key.id must be a string');
     if (scope !== this.#name) throw new TypeError(`Key ${id} is not of scope ${this.#name}`);
     return { id, type, fields };
+  }
+
+  /** The parsed record of key `id`, or undefined if the vault has no such key. */
+  async #findKey(id: string): Promise<KeyRecord | undefined> {
+    const value = await this.#connection.transact([META_STORE, KEYS_STORE], 'readonly', async (tx) => {
+      const header = await readHeader(tx); // rejects a malformed header and keys without one
+      return header ? getKeyRecord(tx, this.#name, id) : undefined;
+    });
+    return value === undefined ? undefined : parseKeyRecord(value);
   }
 
   /** The header and the parsed record of key `id`, read in one transaction. */
@@ -272,12 +302,26 @@ export class Scope {
   }
 }
 
-/** Calls the key type's generate at once; a failure that is not a VaultError already is `unavailable`. */
-async function generateKey(kind: KeyType, request: NewKeyRequest): Promise<NewKey> {
-  return kind.generate(request).catch((cause: unknown) => {
+/** Calls the key type's generate at once. */
+function generateKey(kind: KeyType, request: NewKeyRequest): Promise<NewKey> {
+  return fromKeyType(kind.generate(request), 'The browser failed to generate a key');
+}
+
+/** A key type's result; a failure that is not a VaultError already is `unavailable`. */
+async function fromKeyType<T>(pending: Promise<T>, message: string): Promise<T> {
+  return pending.catch((cause: unknown) => {
     if (cause instanceof VaultError) throw cause;
-    throw new VaultError('unavailable', 'The browser failed to generate a key', { cause });
+    throw new VaultError('unavailable', message, { cause });
   });
+}
+
+/** The label of `options`, read once: a getter can't change between the check and the write. */
+function readLabelOption(options: unknown): string | undefined {
+  if (typeof options !== 'object' || options === null) throw new TypeError('options must be an object');
+  const { label } = options as GenerateOptions; // `as`: checked to be an object; its label is checked next
+  if (label !== undefined && !isLabel(label))
+    throw new TypeError(`A label is a well-formed string of 1 to ${MAX_LABEL_LENGTH} UTF-16 code units`);
+  return label;
 }
 
 /** Optimistic write: runs `attempt` up to `times` times until it returns a value (undefined = vault changed). */

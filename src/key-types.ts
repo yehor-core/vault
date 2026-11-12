@@ -10,9 +10,21 @@ import type { HeaderRecord, KeyFields } from './records.ts';
  * key record, its public-key check and its member of `Signature`, so the core assumes neither a sealed private
  * key nor a signature shape. A new key type is one module in `key-types/` and one entry in `keyTypes`.
  */
-export interface KeyType<Part extends object = object, Sig extends object = object> {
-  /** Whether a key of this type can be added to a vault that has never seen it. */
-  readonly canAdd: boolean;
+export type KeyType<Part extends object = object, Sig extends object = object> = KeyTypeBase<Part, Sig> &
+  (
+    | { readonly canAdd: false }
+    | {
+        /** A key of this type can be added to a vault that has never seen it. */
+        readonly canAdd: true;
+        /**
+         * Asks the user to present an existing key of `scope`, with a prompt started before any await; the core
+         * calls it before its first await. A key not created in `scope` is `not-found`.
+         */
+        add(scope: string): Promise<PresentedKey<Part>>;
+      }
+  );
+
+interface KeyTypeBase<Part extends object, Sig extends object> {
   /**
    * Whether generate and sign show a prompt. Such a type starts it in `generate` and `sign`, which the core calls
    * before its first await, so a user gesture still holds; and its new key's record doesn't depend on the vault
@@ -53,6 +65,14 @@ export interface NewKey<Part extends object = object> {
   part(fields: KeyFields, header: HeaderRecord): Promise<Part>;
   /** Zeroes the secret buffers the type owns. The core calls it once the key is stored or abandoned. */
   erase(): void;
+}
+
+/** A key the user presented: its identity is known; the rest may take another prompt. */
+export interface PresentedKey<Part extends object = object> {
+  /** The bytes the key id hashes, so the core can tell whether the scope holds it already. */
+  readonly identity: Bytes;
+  /** The key as generate would have made it, checked; called only if the scope doesn't hold it. */
+  complete(): Promise<NewKey<Part>>;
 }
 
 /** A stored key and the header of its vault, read in one transaction. */
