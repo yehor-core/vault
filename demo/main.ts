@@ -132,9 +132,13 @@ async function verifyAssertion(
   { authenticatorData, clientDataJSON, signature }: Signature<'passkey'>,
   message: Uint8Array<ArrayBuffer>,
 ): Promise<boolean> {
-  const sha256 = async (bytes: Uint8Array<ArrayBuffer>) => new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+  const sha256 = async (bytes: Uint8Array<ArrayBuffer>) => {
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    return new Uint8Array(digest);
+  };
   const clientData: unknown = JSON.parse(new TextDecoder().decode(clientDataJSON));
   if (typeof clientData !== 'object' || clientData === null) return false;
+  // Defaults first, so each field reads as unknown even when the client data lacks it.
   const { type, challenge, origin } = { type: undefined, challenge: undefined, origin: undefined, ...clientData };
   const messageHash = await sha256(message);
   if (type !== 'webauthn.get' || origin !== location.origin) return false;

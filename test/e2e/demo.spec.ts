@@ -254,10 +254,8 @@ test('demo adds an existing passkey key in a fresh browser context, with the id 
 });
 
 /**
- * Counts the page's WebAuthn calls, and records for each button click how many the button's `onclick` handler
- * started before it returned, so before its first await resumed. A listener after the handler would come too late:
- * the browser runs pending microtasks between listeners, so an `await` of a settled promise would already have
- * resumed. So a capturing listener wraps the button's handler for this one click. `atClicks()` is those counts.
+ * Per button click, how many WebAuthn calls its `onclick` started before returning. Wrapped by a capturing listener:
+ * a later listener runs after the microtask checkpoint, when an `await` of a settled promise has already resumed.
  */
 async function countPromptsAtClicks(page: Page): Promise<{ atClicks: () => Promise<number[]> }> {
   await page.evaluate(() => {
