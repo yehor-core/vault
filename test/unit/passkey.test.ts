@@ -165,7 +165,7 @@ describe('public-key recovery', () => {
 
 let authenticator: VirtualAuthenticator;
 
-// Chromium only: the CDP virtual authenticator exists nowhere else (D-62); e2e in Firefox and WebKit comes with #69.
+// Chromium only: the CDP virtual authenticator exists nowhere else (D-62); e2e in Firefox and WebKit is in test/e2e/passkey.spec.ts.
 describe.runIf(hasVirtualAuthenticator)('passkey keys', () => {
   beforeEach(async () => {
     authenticator = await addVirtualAuthenticator();
