@@ -17,13 +17,13 @@ Roadmap → slice → spec → tickets → one PR per ticket. I start each step.
 5. I review and merge each PR. After the last ticket of a slice is merged: `/wrap-up`.
 
 ## Tests
-- A test written before its code proves it can fail by its red run. A test added to existing code is break-checked: break the code it guards once, show it red, restore, and commit only the restored code. `npm run break-check` does all three (`--typecheck` for type-level tests, `--batch` for several breaks).
+- A test written before its code proves it can fail by its red run. A test added to existing code is break-checked: break the code it guards once, show it red, restore, and commit only the restored code. `npm run break-check` does all three (`--typecheck` for type-level tests, `--batch` for several breaks) and appends the results to `break-check.log`: hand that log to `/code-review`'s Spec agent and quote it under the PR's Evidence.
 - In `/implement`, call the tdd skill before the first edit under `src/` or `demo/`: each new test runs red before its code exists. The seams are the public API the ticket changes, tested where its acceptance criteria are observable. Name them in your first message and go on; the tdd skill's confirmation step is satisfied by the ticket.
 
 ## Git
 - One ticket = one branch = one PR. Before `/implement`, create `S<N>/<NN>-<short-name>` from an up-to-date `main`.
 - Commit messages reference the ticket (`Refs #<issue>`), so `/code-review` finds the spec.
-- In a new worktree, run `npx husky` once before the first commit: it creates the git-ignored `.husky/_` that runs the pre-commit hook (D-26).
+- In a new worktree, run `npm ci` once, before the first test run: it installs the dependencies, and its `prepare` script creates the git-ignored `.husky/_` that runs the pre-commit hook (D-26).
 - Claude Code hooks (`.claude/hooks/`) run from the main checkout, not the worktree: a merged change to them takes effect only after the main checkout is pulled. Tell me to pull it when such a PR merges.
 - To rebase a ticket branch onto `main`: `git rebase`, then `git push --force-with-lease`. The hook blocks a force-push without a lease and every push to `main`.
 - When the ticket is done: push, then `gh pr create`. Title `S<N>-<NN>: <ticket title>`. Body: `Closes #<issue>` first, then the `/pr` template, then a short `/code-review` summary.

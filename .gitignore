@@ -10,3 +10,6 @@ dist/
 # Test artifacts (Playwright results, Vitest failure screenshots)
 test-results/
 .vitest/
+
+# break-check results, appended per run (npm run break-check)
+/break-check.log

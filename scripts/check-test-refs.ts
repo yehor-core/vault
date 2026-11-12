@@ -9,9 +9,12 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 
 const DOCS = ['DESIGN.md', 'README.md'];
 
-// test('t'), describe('t'), test.each(cases)('t %s'), test.skipIf(cond)(\n 't'): the title is the first string argument.
+// test('t'), describe('t'), test.each(cases)('t %s'), test.each<T>(cases)('t'), test.skipIf(cond)(\n 't'): the title
+// is the first string argument. Cases may nest calls two deep.
 const TEST_TITLE =
-  /\b(?:test|it|describe)(?:\.\w+)*\s*(?:\([^()]*(?:\([^()]*\)[^()]*)*\)\s*)?\(\s*(['"`])((?:\\.|[^\\])*?)\1/g;
+  /\b(?:test|it|describe)(?:\.\w+)*(?:<[^()]*?>)?\s*(?:\([^()]*(?:\([^()]*\)[^()]*)*\)\s*)?\(\s*(['"`])((?:\\.|[^\\])*?)\1/y;
+// Where a test call starts. Each one must yield a title, or its citations would read as missing tests.
+const TEST_CALL = /(?<![.\w])(?:test|it|describe)(?:\.\w+)*[<(]/g;
 const PLACEHOLDER = /%[sdifjo#]|\$\{|\$\w/;
 const CITATION = /^(?:([a-z0-9-]+) )?›\s*(.*)$/;
 
@@ -30,7 +33,16 @@ function titlesIn(file: string): string[] {
   const cached = titleCache.get(file);
   if (cached) return cached;
   const source = readFileSync(file, 'utf8');
-  const titles = [...source.matchAll(TEST_TITLE)].map((match) => (match[2] ?? '').replace(/\\(.)/g, '$1'));
+  const titles: string[] = [];
+  for (const call of source.matchAll(TEST_CALL)) {
+    TEST_TITLE.lastIndex = call.index;
+    const match = TEST_TITLE.exec(source);
+    if (match) titles.push((match[2] ?? '').replace(/\\(.)/g, '$1'));
+    else {
+      const line = source.slice(0, call.index).split('\n').length;
+      failures.push(`${file}:${line}: a ${call[0].slice(0, -1)} call whose title check:refs can't read`);
+    }
+  }
   titleCache.set(file, titles);
   return titles;
 }
