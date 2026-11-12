@@ -322,7 +322,7 @@ describe.each(keyTypeCases)('$type', ({ type, publicKeyLength, signatureLength, 
       const old = await scope.generate(type);
       const oldHeader = await readHeader(name);
 
-      await done(indexedDB.deleteDatabase(name)); // `done` rejects if the vault's connection blocks it
+      await done(indexedDB.deleteDatabase(name)); // never settles, or rejects on `blocked`, if the vault's connection holds it
 
       expect(await scope.list()).toEqual([]);
       const key = await scope.generate(type);
