@@ -136,6 +136,34 @@ describe('change notifications', () => {
     expect(() => a.vault.onChange(inA)).toThrow(expect.objectContaining({ name: 'InvalidStateError' }));
   });
 
+  test('a listener that closes its vault stops the listeners after it', async () => {
+    const [a, b] = await openContexts();
+    const after = vi.fn();
+    b.vault.onChange(() => b.vault.close());
+    b.vault.onChange(after);
+
+    await a.vault.wipe();
+    await vi.waitFor(() => expect(() => b.vault.onChange(after)).toThrow()); // b's listeners have run
+
+    await expectCalls(after, 0);
+  });
+
+  test('a write that commits while its vault is closed resolves; its notification is lost', async () => {
+    const [a, b] = await openContexts();
+    const inB = vi.fn();
+    b.vault.onChange(inB);
+    const transaction = IDBDatabase.prototype.transaction;
+    vi.spyOn(IDBDatabase.prototype, 'transaction').mockImplementationOnce(function (this: IDBDatabase, ...args) {
+      const tx = transaction.apply(this, args);
+      a.vault.close(); // after the transaction started: it still commits
+      return tx;
+    });
+
+    await expect(a.vault.wipe()).resolves.toBeUndefined();
+
+    await expectCalls(inB, 0);
+  });
+
   test('a listener that throws does not stop the others, and its error goes to reportError', async () => {
     const [a, b] = await openContexts();
     const reported = vi.spyOn(globalThis, 'reportError').mockImplementation(() => {}); // observed, not thrown at the page

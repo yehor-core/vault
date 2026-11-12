@@ -419,7 +419,7 @@ Scopes are what an embedding layer builds on: it chooses the scope from the send
 - **Persistent storage is not requested** (§4.4): the application decides when to ask, and until it does, eviction can lose every sealed key.
 - **One bad record fails all of `list()`** for its scope (fail closed).
 - **A record planted with a made-up key type name reads as `incompatible`, not `corrupted`**: a well-formed name this build doesn't know can't be told from a newer build's type. It still fails closed (§4.2).
-- **A change notification can be lost** (§6): a context that closes after its commit and before it posts notifies no one, and nothing tells a context that it missed one. Changes made outside Vault are not notified at all: a deleted database, cleared site data, eviction, edits in devtools. Read the vault again on triggers of your own too (focus, reload).
+- **A change notification can be lost** (§6): a context that closes after its commit and before it posts notifies no one (`changes › change notifications › a write that commits while its vault is closed resolves…`), and nothing tells a context that it missed one. Changes made outside Vault are not notified at all: a deleted database, cleared site data, eviction, edits in devtools. Read the vault again on triggers of your own too (focus, reload).
 - **Any same-origin script can forge or flood change notifications** (§2.3); this causes only extra reads.
 - **A `sign` in flight across a wipe in another context may still return its signature** after `wipe()` has resolved there (§6): the signature is ordered before the wipe.
 - **Scopes group keys; they do not isolate same-origin code** (§2.3). Any same-origin code can open any scope.
