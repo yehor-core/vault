@@ -12,9 +12,8 @@ import {
   verifiesOutsideVault,
 } from './passkeys.ts';
 
-// Passkey keys end to end (D-62), from the dev demo's console. Chromium drives its own WebAuthn stack through a
-// virtual authenticator; Firefox and WebKit run against Playwright's JavaScript stand-in for navigator.credentials,
-// which always answers with the user verified, so the declined and unverified prompts are tested in Chromium only.
+// Passkey keys end to end (D-62), from the dev demo's console. Playwright's stand-in in Firefox and WebKit always
+// answers with the user verified, so declined and unverified prompts are tested in Chromium only.
 
 const message = 'message to sign';
 
@@ -73,13 +72,15 @@ test('a passkey moved to a new browser context with an empty vault is added ther
 /** Gives every later passkey prompt of the page a 100 ms timeout: with presence off, it then ends as a declined one. */
 async function shortenPromptTimeouts(page: Page): Promise<void> {
   await page.evaluate(() => {
-    for (const method of ['create', 'get'] as const) {
-      const original = navigator.credentials[method].bind(navigator.credentials);
-      Object.assign(navigator.credentials, {
-        [method]: (options: CredentialCreationOptions & CredentialRequestOptions) =>
-          original({ ...options, publicKey: { ...options.publicKey, timeout: 100 } } as never),
-      });
-    }
+    const credentials = navigator.credentials;
+    const create = credentials.create.bind(credentials);
+    const get = credentials.get.bind(credentials);
+    Object.assign(credentials, {
+      create: (options: CredentialCreationOptions) =>
+        create({ ...options, ...(options.publicKey && { publicKey: { ...options.publicKey, timeout: 100 } }) }),
+      get: (options: CredentialRequestOptions) =>
+        get({ ...options, ...(options.publicKey && { publicKey: { ...options.publicKey, timeout: 100 } }) }),
+    });
   });
 }
 
@@ -126,7 +127,7 @@ async function promptStartsInClickHandler(page: Page, call: PromptingCall): Prom
   await page.evaluate(
     async ({ scope, call, message }) => {
       // `as`: the global the dev demo sets; undefined fails the call below
-      const { Vault } = globalThis as unknown as typeof import('../../src/index.ts');
+      const { Vault } = globalThis as unknown as { Vault: typeof import('../../src/index.ts').Vault };
       const vault = await Vault.open();
       const keys = vault.scope(scope);
       const [key] = await keys.list();

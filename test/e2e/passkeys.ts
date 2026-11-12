@@ -1,11 +1,10 @@
 import { expect, type Browser, type BrowserContext, type CDPSession, type Page } from '@playwright/test';
 import { createHash, createPrivateKey, createPublicKey, verify } from 'node:crypto';
-import { DEMO_SCOPE, openDemo } from './contexts.ts';
+import type { VaultErrorCode } from '../../src/index.ts';
+import { DEMO_SCOPE, openDemo, type PageKey } from './contexts.ts';
 
-// Passkey authenticators for e2e tests (D-62), and passkey calls made from the dev demo's console.
-// Chromium: a CTAP2 virtual authenticator through the CDP WebAuthn domain, the browser's own WebAuthn stack.
-// Firefox and WebKit: Playwright's `browserContext.credentials`, a JavaScript stand-in for `navigator.credentials`
-// that always signs ES256 with UP and UV, so it can't decline a prompt or skip user verification.
+// Passkey authenticators for e2e tests (D-62): Chromium's own WebAuthn through a CDP virtual authenticator; in
+// Firefox and WebKit, Playwright's JavaScript stand-in, which always signs ES256 with UP and UV.
 
 /** The relying-party id of the dev demo's origin (`playwright.config.ts`). */
 const RP_ID = 'localhost';
@@ -50,14 +49,13 @@ export async function openWithAuthenticator(
     const page = await openDemo(context);
     return { page, authenticator: await addVirtualAuthenticator(page, passkeys) };
   }
-  // Playwright's WebKit build on Linux has no WebAuthn: no navigator.credentials, and PublicKeyCredential is no
-  // constructor. The stand-in builds its answers on the prototypes of these classes when it finds them, so Vault's
-  // `instanceof` checks see what they see in a browser with WebAuthn. Registered first, so it runs before the stand-in.
+  // Playwright's WebKit on Linux has no WebAuthn classes; the stand-in builds its answers on these, when present, so
+  // Vault's `instanceof` checks pass. Registered before install(), so it runs before the stand-in.
   await context.addInitScript(() => {
     for (const name of ['PublicKeyCredential', 'AuthenticatorAttestationResponse', 'AuthenticatorAssertionResponse']) {
       if (typeof Reflect.get(globalThis, name) === 'function') continue;
-      const stand = { [name]: class {} }[name]; // a class with this name
-      Object.defineProperty(globalThis, name, { value: stand, writable: true, configurable: true });
+      const emptyClass = { [name]: class {} }[name]; // a class with this name
+      Object.defineProperty(globalThis, name, { value: emptyClass, writable: true, configurable: true });
     }
   });
   // Before the page first touches navigator.credentials, as `install()` asks.
@@ -104,9 +102,9 @@ export async function addVirtualAuthenticator(
       return credentials
         .filter((credential) => credential.rpId === RP_ID)
         .map(({ credentialId, userHandle, privateKey, signCount }) => ({
-          id: rebase(credentialId, 'base64', 'base64url'),
-          userHandle: rebase(userHandle ?? '', 'base64', 'base64url'),
-          privateKey: rebase(privateKey, 'base64', 'base64url'),
+          id: reencode(credentialId, 'base64', 'base64url'),
+          userHandle: reencode(userHandle ?? '', 'base64', 'base64url'),
+          privateKey: reencode(privateKey, 'base64', 'base64url'),
           signCount,
         }));
     },
@@ -123,11 +121,11 @@ async function addCredential(session: CDPSession, authenticatorId: string, passk
   await session.send('WebAuthn.addCredential', {
     authenticatorId,
     credential: {
-      credentialId: rebase(passkey.id, 'base64url', 'base64'),
+      credentialId: reencode(passkey.id, 'base64url', 'base64'),
       isResidentCredential: true,
       rpId: RP_ID,
-      privateKey: rebase(passkey.privateKey, 'base64url', 'base64'),
-      userHandle: rebase(passkey.userHandle, 'base64url', 'base64'),
+      privateKey: reencode(passkey.privateKey, 'base64url', 'base64'),
+      userHandle: reencode(passkey.userHandle, 'base64url', 'base64'),
       signCount: passkey.signCount,
     },
   });
@@ -138,7 +136,7 @@ async function standInPasskeys(context: BrowserContext): Promise<MovablePasskey[
   return credentials.map(({ id, userHandle, privateKey, signCount }) => ({ id, userHandle, privateKey, signCount }));
 }
 
-function rebase(text: string, from: BufferEncoding, to: BufferEncoding): string {
+function reencode(text: string, from: BufferEncoding, to: BufferEncoding): string {
   return Buffer.from(text, from).toString(to);
 }
 
@@ -148,9 +146,7 @@ function spkiOf(privateKey: string): Buffer {
 }
 
 /** A passkey key as it crosses from a page to the test: plain numbers, no typed arrays. */
-export interface PagePasskey {
-  readonly id: string;
-  readonly publicKey: number[];
+export interface PagePasskey extends PageKey {
   readonly credentialId: number[];
 }
 
@@ -161,52 +157,42 @@ export interface PageAssertion {
   readonly signature: number[];
 }
 
-// The page functions below rethrow a VaultError as an Error whose message starts with `VaultError <code>`, so a
-// test can read the code across page.evaluate, which keeps only the message.
+// The page functions below rethrow a VaultError as `VaultError <code>: …`: page.evaluate keeps only the message.
 
 /** A passkey key generated in the demo scope from the page's console. */
-export async function generatePasskey(page: Page): Promise<PagePasskey> {
-  return page.evaluate(async (scope) => {
-    // `as`: the global the dev demo sets; undefined fails the call below
-    const { Vault } = globalThis as unknown as typeof import('../../src/index.ts');
-    const vault = await Vault.open();
-    try {
-      const key = await vault.scope(scope).generate('passkey');
-      return { id: key.id, publicKey: Array.from(key.publicKey), credentialId: Array.from(key.credentialId) };
-    } catch (error) {
-      throw error instanceof Error && error.name === 'VaultError' && 'code' in error
-        ? new Error(`VaultError ${String(error.code)}: ${error.message}`)
-        : error;
-    } finally {
-      vault.close();
-    }
-  }, DEMO_SCOPE);
-}
+export const generatePasskey = (page: Page): Promise<PagePasskey> => newPasskey(page, 'generate');
 
 /** A passkey the authenticator holds, added to the demo scope from the page's console. */
-export async function addPasskey(page: Page): Promise<PagePasskey> {
-  return page.evaluate(async (scope) => {
-    // `as`: the global the dev demo sets; undefined fails the call below
-    const { Vault } = globalThis as unknown as typeof import('../../src/index.ts');
-    const vault = await Vault.open();
-    try {
-      const key = await vault.scope(scope).add('passkey');
-      return { id: key.id, publicKey: Array.from(key.publicKey), credentialId: Array.from(key.credentialId) };
-    } catch (error) {
-      throw error instanceof Error && error.name === 'VaultError' && 'code' in error
-        ? new Error(`VaultError ${String(error.code)}: ${error.message}`)
-        : error;
-    } finally {
-      vault.close();
-    }
-  }, DEMO_SCOPE);
+export const addPasskey = (page: Page): Promise<PagePasskey> => newPasskey(page, 'add');
+
+async function newPasskey(page: Page, call: 'generate' | 'add'): Promise<PagePasskey> {
+  return page.evaluate(
+    async ({ scope, call }) => {
+      // `as`: the global the dev demo sets; undefined fails the call below
+      const { Vault } = globalThis as unknown as { Vault: typeof import('../../src/index.ts').Vault };
+      const vault = await Vault.open();
+      try {
+        const key = await (call === 'generate'
+          ? vault.scope(scope).generate('passkey')
+          : vault.scope(scope).add('passkey'));
+        return { id: key.id, publicKey: Array.from(key.publicKey), credentialId: Array.from(key.credentialId) };
+      } catch (error) {
+        throw error instanceof Error && error.name === 'VaultError' && 'code' in error
+          ? new Error(`VaultError ${String(error.code)}: ${error.message}`)
+          : error;
+      } finally {
+        vault.close();
+      }
+    },
+    { scope: DEMO_SCOPE, call },
+  );
 }
 
 /** Every passkey key the page lists in the demo scope. */
 export async function listPasskeys(page: Page): Promise<PagePasskey[]> {
   return page.evaluate(async (scope) => {
     // `as`: the global the dev demo sets; undefined fails the call below
-    const { Vault } = globalThis as unknown as typeof import('../../src/index.ts');
+    const { Vault } = globalThis as unknown as { Vault: typeof import('../../src/index.ts').Vault };
     const vault = await Vault.open();
     try {
       return (await vault.scope(scope).list()).map((key) => {
@@ -224,7 +210,7 @@ export async function signWithPasskey(page: Page, key: PagePasskey, message: str
   return page.evaluate(
     async ({ scope, id, message }) => {
       // `as`: the global the dev demo sets; undefined fails the call below
-      const { Vault } = globalThis as unknown as typeof import('../../src/index.ts');
+      const { Vault } = globalThis as unknown as { Vault: typeof import('../../src/index.ts').Vault };
       const vault = await Vault.open();
       try {
         const stored = (await vault.scope(scope).list()).find((listed) => listed.id === id);
@@ -248,7 +234,7 @@ export async function signWithPasskey(page: Page, key: PagePasskey, message: str
 }
 
 /** Expects a page call to fail with a VaultError of this code. */
-export async function expectVaultError(call: Promise<unknown>, code: string): Promise<void> {
+export async function expectVaultError(call: Promise<unknown>, code: VaultErrorCode): Promise<void> {
   await expect(call).rejects.toThrow(`VaultError ${code}:`);
 }
 
@@ -269,8 +255,12 @@ export function verifiesOutsideVault(
   const sha256 = (bytes: Uint8Array | string) => createHash('sha256').update(bytes).digest();
   const clientData: unknown = JSON.parse(Buffer.from(clientDataJSON).toString('utf8'));
   if (typeof clientData !== 'object' || clientData === null) return false;
-  const { type, challenge, origin: from } = { type: undefined, challenge: undefined, origin: undefined, ...clientData };
-  if (type !== 'webauthn.get' || from !== origin) return false;
+  const {
+    type,
+    challenge,
+    origin: clientOrigin,
+  } = { type: undefined, challenge: undefined, origin: undefined, ...clientData };
+  if (type !== 'webauthn.get' || clientOrigin !== origin) return false;
   if (challenge !== sha256(message).toString('base64url')) return false;
   const data = Buffer.from(authenticatorData);
   if (!data.subarray(0, 32).equals(sha256(RP_ID))) return false;
