@@ -11,4 +11,4 @@ Close slice S<N> once its last ticket is merged. The user names the slice; other
 3. Write the slice report from the slice's merged PRs and the `DESIGN.md` and README "Property → test" rows they changed:
    - **Guarantees**: each thing the slice guarantees → the test or code that enforces it. **Not guaranteed**: said plainly. Done when every claim has a reference.
    - **Break it**: 2–3 experiments to run by hand. Start from the block in [console-prelude.md](console-prelude.md). For each: exact steps with a copy-paste `js` code block, the expected result including the error code, and whether an automated test covers it; if none does, why it can't be automated. Done when `npm run console-snippets -- <report.md>` exits 0 and its output matches every expected result in all three engines.
-4. Commit, push the branch, and open the PR: title `S<N>: wrap-up`, body the report. Post the link in chat.
+4. Commit, push the branch, and open the PR: title `S<N>: wrap-up`, body `Closes #<spec>` on its first line (the slice's `Spec:`), then the report. Merging closes the spec. Post the link in chat.
