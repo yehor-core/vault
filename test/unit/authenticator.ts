@@ -15,6 +15,10 @@ export interface VirtualAuthenticator {
   credentials(): Promise<VirtualCredential[]>;
   /** Makes every later assertion carry a signature that does not verify, or answer without user verification. */
   overrideResponses(bits: { isBogusSignature?: boolean; isBadUV?: boolean }): Promise<void>;
+  /** With presence off, a prompt is never answered: it ends at its timeout, as a declined prompt does. */
+  setPresence(answers: boolean): Promise<void>;
+  /** Deletes a passkey at the authenticator, as a user does in their passkey manager. */
+  removeCredential(credentialId: Uint8Array): Promise<void>;
   remove(): Promise<void>;
 }
 
@@ -46,6 +50,12 @@ export async function addVirtualAuthenticator(): Promise<VirtualAuthenticator> {
     },
     async overrideResponses(bits) {
       await session.send('WebAuthn.setResponseOverrideBits', { authenticatorId, ...bits });
+    },
+    async setPresence(answers) {
+      await session.send('WebAuthn.setAutomaticPresenceSimulation', { authenticatorId, enabled: answers });
+    },
+    async removeCredential(credentialId) {
+      await session.send('WebAuthn.removeCredential', { authenticatorId, credentialId: credentialId.toBase64() });
     },
     async remove() {
       await session.send('WebAuthn.removeVirtualAuthenticator', { authenticatorId });

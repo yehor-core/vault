@@ -96,6 +96,16 @@ function changeAssertions(change: (credential: PublicKeyCredential) => Promise<v
   });
 }
 
+/** Gives the next `method` prompt a short timeout: with presence off, it then ends as a declined prompt does. */
+function shortTimeout(method: 'create' | 'get') {
+  const original = navigator.credentials[method].bind(navigator.credentials);
+  return vi
+    .spyOn(navigator.credentials, method)
+    .mockImplementationOnce(async (options?: CredentialCreationOptions & CredentialRequestOptions) =>
+      original({ ...options, publicKey: { ...options?.publicKey, timeout: 100 } } as never),
+    );
+}
+
 /** Replaces a field of a browser object with an own value; its getter stays on the prototype. */
 const replaceField = (object: object, field: string, value: unknown) =>
   Object.defineProperty(object, field, { value, configurable: true });
@@ -340,10 +350,10 @@ describe.runIf(hasVirtualAuthenticator)('passkey keys', () => {
         expect(await verifyAssertion(publicKey, await scope.sign(key, message), message)).toBe(true);
       });
 
-      test('an assertion without user verification is rejected', async () => {
+      test('an assertion without user verification is unsupported', async () => {
         const { scope, key, forge } = await forgedSetup();
         forge({ flags: 0x01 }); // UP only
-        const error = await expectVaultError(scope.sign(key, message), 'corrupted');
+        const error = await expectVaultError(scope.sign(key, message), 'unsupported');
         expect(error.message).toMatch(/no user verification/);
       });
 
@@ -399,6 +409,87 @@ describe.runIf(hasVirtualAuthenticator)('passkey keys', () => {
       await expect(scope.sign({ ...key, credentialId: other.credentialId }, message)).rejects.toThrow(
         new TypeError(`Key ${key.id} has another credential id than the one given`),
       );
+    });
+  });
+
+  // D-59: a declined, timed-out or unanswerable prompt is cancelled; it is the user's answer, so not retryable.
+  describe('a failed prompt', () => {
+    test('a generate whose prompt is declined is cancelled, with the browser error as cause, and writes nothing', async () => {
+      const { scope, name } = await openVault();
+      await authenticator.setPresence(false);
+      shortTimeout('create');
+
+      const error = await expectVaultError(scope.generate('passkey'), 'cancelled');
+      expect(error.cause).toBeInstanceOf(DOMException);
+      expect(error.cause).toMatchObject({ name: 'NotAllowedError' });
+      expect(await readHeader(name)).toBeUndefined();
+      expect(await scope.list()).toEqual([]);
+    });
+
+    test('a sign whose prompt is declined is cancelled, with the browser error as cause', async () => {
+      const { scope } = await openVault();
+      const key = await scope.generate('passkey');
+      await authenticator.setPresence(false);
+      shortTimeout('get');
+
+      const error = await expectVaultError(scope.sign(key, message), 'cancelled');
+      expect(error.cause).toMatchObject({ name: 'NotAllowedError' });
+      expect(await scope.list()).toEqual([key]);
+    });
+
+    // The threat model's lost, deleted or replaced passkey: indistinguishable from a cancel (D-59).
+    test('a sign with a passkey removed from its authenticator is cancelled', async () => {
+      const { scope } = await openVault();
+      const [key, kept] = [await scope.generate('passkey'), await scope.generate('passkey')];
+      await authenticator.removeCredential(key.credentialId);
+      shortTimeout('get');
+
+      const error = await expectVaultError(scope.sign(key, message), 'cancelled');
+      expect(error.cause).toMatchObject({ name: 'NotAllowedError' });
+      expect(await verifyAssertion(kept.publicKey, await scope.sign(kept, message), message)).toBe(true);
+    });
+  });
+
+  // D-59: TASK "Using a passkey key requires user verification (PIN or biometric), not just presence".
+  describe('an authenticator without user verification', () => {
+    test('a sign answered without user verification is unsupported, and returns no signature', async () => {
+      const { scope } = await openVault();
+      const key = await scope.generate('passkey');
+      await authenticator.overrideResponses({ isBadUV: true });
+
+      const error = await expectVaultError(scope.sign(key, message), 'unsupported');
+      expect(error.message).toMatch(/no user verification/);
+    });
+
+    // No virtual authenticator raises these, so the browser's rejection is injected.
+    describe.each(['NotSupportedError', 'ConstraintError'])('the browser error %s', (errorName) => {
+      const rejectNext = (method: 'create' | 'get') => {
+        const cause = new DOMException('injected', errorName);
+        vi.spyOn(navigator.credentials, method).mockRejectedValueOnce(cause);
+        return cause;
+      };
+
+      test('makes generate unsupported, with it as cause, and writes nothing', async () => {
+        const { scope, name } = await openVault();
+        const cause = rejectNext('create');
+        const error = await expectVaultError(scope.generate('passkey'), 'unsupported');
+        expect(error.cause).toBe(cause);
+        expect(await readHeader(name)).toBeUndefined();
+      });
+
+      test('makes sign unsupported, with it as cause', async () => {
+        const { scope } = await openVault();
+        const key = await scope.generate('passkey');
+        const cause = rejectNext('get');
+        const error = await expectVaultError(scope.sign(key, message), 'unsupported');
+        expect(error.cause).toBe(cause);
+      });
+    });
+
+    test('any other browser error is unavailable, as before', async () => {
+      const { scope } = await openVault();
+      vi.spyOn(navigator.credentials, 'create').mockRejectedValueOnce(new DOMException('injected', 'UnknownError'));
+      await expectVaultError(scope.generate('passkey'), 'unavailable');
     });
   });
 
