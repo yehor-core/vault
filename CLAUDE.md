@@ -17,7 +17,7 @@ Roadmap → slice → spec → tickets → one PR per ticket. I start each step.
 5. I review and merge each PR. After the last ticket of a slice is merged: `/wrap-up`.
 
 ## Tests
-- A test written before its code proves it can fail by its red run. A test added to existing code is break-checked: break the code it guards once, show it red, restore, and commit only the restored code. `npm run break-check` does all three (`--typecheck` for type-level tests, `--batch` for several breaks) and appends the results to `break-check.log`: hand that log to `/code-review`'s Spec agent and quote it under the PR's Evidence.
+- A test written before its code proves it can fail by its red run. A test added to existing code is break-checked: break the code it guards once, show it red, restore, and commit only the restored code. `npm run break-check` does all three (`--typecheck` for type-level tests, `--batch` for several breaks) and appends the results to `break-check.log`, ending with the line range it appended: hand those lines to `/code-review`'s Spec agent and quote them under the PR's Evidence.
 - In `/implement`, call the tdd skill before the first edit under `src/` or `demo/`: each new test runs red before its code exists. The seams are the public API the ticket changes, tested where its acceptance criteria are observable. Name them in your first message and go on; the tdd skill's confirmation step is satisfied by the ticket.
 
 ## Git

@@ -1,0 +1,3 @@
+# The tickets this commit closes (its `Refs #NN`) must be named nowhere in DESIGN.md or README.md (D-49).
+# pre-commit runs before the message exists, so the first commit of a ticket is checked here.
+npm run --silent check:refs -- --message "$1"

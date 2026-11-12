@@ -37,9 +37,14 @@ function breakCheck(
   args: string[],
   batch?: unknown,
   fakeRed = '',
+  files: Record<string, string> = {},
 ): { status: number | null; output: string; code: string; log: string } {
   const dir = mkdtempSync(join(tmpdir(), 'break-check-'));
   try {
+    for (const [path, content] of Object.entries(files)) {
+      mkdirSync(join(dir, path, '..'), { recursive: true });
+      writeFileSync(join(dir, path), content);
+    }
     mkdirSync(join(dir, 'src'));
     writeFileSync(join(dir, 'src/code.ts'), CODE);
     writeFileSync(join(dir, 'typecheck.cjs'), TYPECHECK);
@@ -169,4 +174,34 @@ test('a break of an e2e test runs Playwright in Chromium, Firefox and WebKit, an
   const two = breakCheck(e2eBreak, undefined, 'chromium firefox');
   assert.equal(two.status, 1, two.output);
   assert.match(two.output, /^NOT red in webkit: 1 passed/m);
+});
+
+// A real script test, run by Node's test runner: it fails once src/code.ts no longer exports true.
+const SCRIPT_TEST = {
+  'scripts/code.test.ts': `import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { ok } from '../src/code.ts';
+test('the guarded test', () => assert.equal(ok, true));
+test('another test', () => assert.equal(ok, false));
+`,
+};
+const scriptBreak = (replacement: string) => ['src/code.ts', 'true', replacement, 'scripts/code.test.ts', 'guarded'];
+
+test('a break of a script test runs it in Node alone, and is red only if a matched test failed', () => {
+  const red = breakCheck(scriptBreak('false'), undefined, '', SCRIPT_TEST);
+  assert.equal(red.status, 0, red.output);
+  assert.deepEqual(red.output.match(/^red in \w+: .*/gm), ['red in node: 0 passed, 1 failed']);
+  assert.equal(red.code, CODE);
+
+  const green = breakCheck(scriptBreak('true || false'), undefined, '', SCRIPT_TEST); // "another test" fails, unmatched
+  assert.equal(green.status, 1, green.output);
+  assert.match(green.output, /^NOT red in node: 1 passed, 0 failed/m);
+});
+
+test('every run prints the lines of break-check.log it appended', () => {
+  const earlier = '# an earlier run\n== a break\nred in typecheck: x\n';
+  const { output, log } = breakCheck(typecheckBreak('BROKEN'), undefined, '', { 'break-check.log': earlier });
+  const total = log.split('\n').length - 1;
+  assert.ok(total > 3, log);
+  assert.match(output, new RegExp(`^logged: break-check\\.log lines 4–${total}$`, 'm'));
 });

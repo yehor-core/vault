@@ -5,10 +5,18 @@
 // A "not tested" mark names, in its own table cell or sentence, the ticket that will test it (#NN) or says
 // "not protected", so a mark can't outlive the work it waits for unnoticed.
 //
+// The tickets this branch closes are named nowhere in the docs: once a ticket's tests exist, a "not yet (#NN)" left
+// behind in any wording is stale. They are the `Refs #NN` of the branch's commits since its merge-base with the
+// base ref, and of the commit being made (--message, from the commit-msg hook).
+// The README status names the slice ROADMAP.md marks in progress, or, with none, the last one done.
+//
+//   npm run check:refs -- [base ref, default origin/main] [--message <commit message file>]
+//
 // Citation forms: `storage › full title`, `storage › describe group › title` (each segment must exist),
 // a title cut short with "…", a parameter written as <field>, cases listed as "a / b / c…", and a bare
 // `› title` that continues the file named earlier on the same line.
 
+import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 
 const DOCS = ['DESIGN.md', 'README.md'];
@@ -82,6 +90,54 @@ const failures: string[] = [];
 let checked = 0;
 let checkedCode = 0;
 
+const REFS = /^Refs #(\d+)\b/gm;
+const TICKET = /#(\d+)\b/g;
+
+/** The tickets this branch closes: `Refs #NN` in its commits since the merge-base, and in --message. */
+function closedTickets(args: string[]): Set<string> {
+  const at = args.indexOf('--message');
+  const messageFile = at === -1 ? undefined : args[at + 1];
+  const ref = args.find((arg, index) => !arg.startsWith('--') && (at === -1 || index !== at + 1)) ?? 'origin/main';
+  let messages = messageFile === undefined ? '' : readFileSync(messageFile, 'utf8');
+  try {
+    const git = (...gitArgs: string[]) =>
+      execFileSync('git', gitArgs, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    const base = git('merge-base', ref, 'HEAD').trim();
+    messages += git('log', '--format=%B', `${base}..HEAD`);
+  } catch (error) {
+    // No git or no base ref (a fixture, a shallow clone): only --message counts. CI fetches the full history.
+    const reason = error instanceof Error ? (error.message.split('\n')[0] ?? '') : String(error);
+    console.error(`check:refs: branch commits not read (${reason}); closed tickets from --message only`);
+  }
+  return new Set(Array.from(messages.matchAll(REFS), (match) => match[1] ?? ''));
+}
+
+/** A line naming a ticket this branch closes is a mark that outlived its work. */
+function checkClosed(line: string, where: string, closed: Set<string>): void {
+  for (const [, ticket] of line.matchAll(TICKET)) {
+    if (ticket !== undefined && closed.has(ticket)) {
+      failures.push(`${where}: names #${ticket}, which this branch closes (Refs #${ticket}): cite its tests instead`);
+    }
+  }
+}
+
+/** README's `Status: S<N> <state>` matches ROADMAP.md: the slice in progress, or, with none, the last one done. */
+function checkStatus(): void {
+  if (!existsSync('docs/ROADMAP.md')) return;
+  const slices = Array.from(
+    readFileSync('docs/ROADMAP.md', 'utf8').matchAll(/^## (S\d+):.*\nStatus: (done|in progress|planned)\b/gm),
+    ([, slice, state]) => ({ slice, state }),
+  );
+  const current =
+    slices.find(({ state }) => state === 'in progress') ?? slices.findLast(({ state }) => state === 'done');
+  if (current === undefined) return;
+  const expected = `Status: ${current.slice} ${current.state}`;
+  const status = /Status: S\d+ (?:in progress|done)/.exec(readFileSync('README.md', 'utf8'));
+  if (status?.[0] !== expected) {
+    failures.push(`README.md: says "${status?.[0] ?? 'no status'}", ROADMAP.md says "${expected}"`);
+  }
+}
+
 /** Whether `source` holds `name` as a whole name: `commitKeyRecord` is not `#commitKeyRecord`. */
 function containsName(source: string, name: string): boolean {
   const escaped = name.replace(/[$]/g, '\\$&');
@@ -120,6 +176,8 @@ function checkMarks(line: string, where: string): void {
   }
 }
 
+const closed = closedTickets(process.argv.slice(2));
+checkStatus();
 for (const doc of DOCS) {
   const lines = readFileSync(doc, 'utf8').split('\n');
   lines.forEach((line, index) => {
@@ -128,6 +186,7 @@ for (const doc of DOCS) {
     const parts = line.split('`');
     checkCode(parts, where);
     checkMarks(line, where);
+    checkClosed(line, where, closed);
     const codeSpans = parts.filter((_, part) => part % 2 === 1);
     for (const span of codeSpans) {
       const citation = CITATION.exec(span);
@@ -161,6 +220,7 @@ if (failures.length > 0) {
   process.exitCode = 1;
 } else {
   console.log(
-    `${checked} test citations and ${checkedCode} code citations resolve; every "not tested" mark names its ticket.`,
+    `${checked} test citations and ${checkedCode} code citations resolve; every "not tested" mark names its ticket; ` +
+      `no ticket this branch closes (${closed.size}) is named; the README status matches the roadmap.`,
   );
 }
