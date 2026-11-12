@@ -4,7 +4,7 @@
 Template. Guidance lives in HTML comments; delete each comment once its section is written.
 Rules for filling:
 - Short as it can be while complete. Prefer tables and one-line statements over prose.
-- Every guarantee names the code or test that enforces it (file:test name). No reference → write "not protected".
+- Every guarantee names the code or test that enforces it (file:test name). No reference → write "not protected"; a test still to come → "not tested yet: #NN", naming its ticket in the same cell or sentence. `npm run check:refs` checks the code and test names and the ticket.
 - Self-contained: state each decision's outcome and rejected alternatives here, without links or decision IDs, so the document reads on its own.
 -->
 
@@ -20,7 +20,7 @@ Vault is a browser-native private-key store on IndexedDB. An application calls i
 | Optional, upgradeable protection | Format ready; upgrade not built yet | §3.1, §5 |
 | Cheap to add, gated to use | Adding needs only the public wrapping key | §3.1 |
 | Many key types, one model | ed25519 and secp256k1; a new sealed key type is one module and one registry entry | §7.5 |
-| Correct under concurrency and failure | Atomic writes, fail-closed reads; no lost updates and first-time setup tested across tabs, wipe races not yet | §4.2, §6 |
+| Correct under concurrency and failure | Atomic writes, fail-closed reads; no lost updates and first-time setup tested across tabs, wipe races not yet (#54) | §4.2, §6 |
 | A small, idiomatic domain API | Built for unprotected ed25519 and secp256k1 keys in named scopes | §7 |
 
 ## 2. Threat model
@@ -60,7 +60,7 @@ Trusted: the browser, its WebCrypto and IndexedDB implementations, the OS, and o
 | Lost, deleted or replaced passkey (passkey key) | Both | Not built yet | | |
 | Secrets in memory | Both | Ed25519 private keys exist only as CryptoKey objects: sealed with `wrapKey`, opened with `unwrapKey` into a non-extractable key, never as JS bytes. Per-key AES keys and the ECDH result stay inside `deriveKey`. A key type that holds secrets in JS buffers erases them once a generated key is stored or abandoned: `generate` calls the type's `erase` on success and on every failure path. secp256k1 zeroes every secret buffer Vault owns: the 48-byte key-generation seed as soon as the scalar is derived from it, the scalar when `erase` runs, and the decrypted scalar when `sign` returns or fails. | **The secp256k1 private key exists as JS bytes during `generate` and `sign`**, and the curve library's internal copies (bigints, hash state) are not zeroed: not protected. JS can't zero memory, and the browser may hold internal copies. A CryptoKey lives until garbage collection. | `src/key-types/ed25519.ts`, `src/key-types/secp256k1.ts`, `src/seal.ts`; `storage › a generated key has its secrets erased once, after it is stored`, `› a generated key has its secrets erased when generate fails: <case>`, `storage › secp256k1 › generate erases the seed and the scalar it owns, also when the write fails`, `› sign erases the decrypted scalar, also when it is rejected` |
 | Storage evicted by the browser | Both | An empty database behaves as a new vault. A database deleted while a vault is open (site data cleared, eviction, another tab's `deleteDatabase`) is an empty vault on the next call: `list()` returns `[]` and `generate()` creates a new vault; the application need not reopen it. A key sealed before the deletion is never written next to a missing header: its write fails the header check and `generate` is redone against a new header. | Can't be told apart from a vault that was never used or was wiped; the caller is not told. An evicted protected vault (not built) becomes unprotected on the next `generate()` (§4.4). **Eviction is not protected against:** it loses every sealed key for good. Vault never requests persistent storage; the application decides when to ask (§4.4). | `vault › opening and listing write nothing; the first generate creates the vault`, `vault › a database deleted while the vault is open is an empty vault: list returns no keys and generate creates a new vault`, `› a generate whose key was sealed before the database was deleted is redone: one key, sealed to the new header`, `src/db.ts` `onversionchange`, `src/scope.ts` `#commitKeyRecord` |
-| Crash or closed tab mid-operation | Both | Every multi-record change is one IndexedDB transaction, so a crash leaves the old state or the new one. A tab closed while the first `generate` writes its header and key (Chromium, Firefox, WebKit), or a renderer crash at that point (Chromium), cut before the commit leaves no vault, and a fresh page generates anew; cut right after the commit it leaves the header and the key together, and a fresh page lists and signs with the key. A transaction that aborts, even after its body has run, fails the call with `unavailable` and writes nothing. | A whole-browser or OS crash is not tested. A renderer crash is tested only in Chromium, the one engine Playwright can crash. | `e2e › a tab closed while the first generate writes leaves the old state or the new one, never a mix: <cut>`, `e2e › a renderer crash while the first generate writes… <cut>` (Chromium), `vault › the first generate writes header and key atomically…`, `› a write that aborts at commit…`, `› wipe is one transaction…`, `src/db.ts` `transact` |
+| Crash or closed tab mid-operation | Both | Every multi-record change is one IndexedDB transaction, so a crash leaves the old state or the new one. A tab closed while the first `generate` writes its header and key (Chromium, Firefox, WebKit), or a renderer crash at that point (Chromium), cut before the commit leaves no vault, and a fresh page generates anew; cut right after the commit it leaves the header and the key together, and a fresh page lists and signs with the key. A transaction that aborts, even after its body has run, fails the call with `unavailable` and writes nothing. | A whole-browser or OS crash is not tested: not protected. A renderer crash is tested only in Chromium, the one engine Playwright can crash. | `e2e › a tab closed while the first generate writes leaves the old state or the new one, never a mix: <cut>`, `e2e › a renderer crash while the first generate writes… <cut>` (Chromium), `vault › the first generate writes header and key atomically…`, `› a write that aborts at commit…`, `› wipe is one transaction…`, `src/db.ts` `transact` |
 
 ### 2.4 Out of scope for the threat model
 
@@ -206,7 +206,7 @@ stateDiagram-v2
 |---|---|---|---|---|---|
 | Empty | `generate` | Unprotected | none | Header and key added in one transaction; the header is added only if still absent and no key record exists. Two first `generate` calls converge on one header: `concurrency › concurrent first-time setup › a first generate held while another context runs its first generate…`; `e2e › concurrent first generates from two tabs converge on one vault…` (Chromium, Firefox, WebKit) | Nothing written: `vault › the first generate writes header and key atomically…` |
 | Corrupted (key records without a header) | `list`, `generate`, `sign` | Corrupted | none | — | `corrupted`; only `wipe` leads out |
-| Unprotected | `generate` | Unprotected | none | One transaction re-checks the header and adds the key (the re-check is not tested until the multi-tab slice) | Nothing written: `vault › a write that aborts at commit…` |
+| Unprotected | `generate` | Unprotected | none | One transaction re-checks the header and adds the key (the re-check against a changed header is not tested yet: #54) | Nothing written: `vault › a write that aborts at commit…` |
 | Unprotected | `delete` | Unprotected | none | One request | Nothing deleted |
 | Any | `wipe` | Empty | none | Both stores, every scope, cleared in one transaction: `vault › wipe removes the keys of every scope and the header in one transaction` | Nothing cleared: `vault › wipe is one transaction…` |
 
@@ -224,7 +224,7 @@ stateDiagram-v2
 
 ### 5.4 Wipe
 
-`wipe()` clears the header and every key of every scope in one transaction: `vault › wipe removes the keys of every scope…`, `vault › wipe removes every key and the vault header; the next generate starts a new vault`. The next `generate()` creates a new wrapping key pair, so nothing sealed before the wipe can be opened afterwards. `generate` re-reads the header inside its write transaction, so a key sealed to the wiped vault can't land (not tested until the multi-tab slice). Wipe doesn't erase what the storage engine has not yet overwritten on disk.
+`wipe()` clears the header and every key of every scope in one transaction: `vault › wipe removes the keys of every scope…`, `vault › wipe removes every key and the vault header; the next generate starts a new vault`. The next `generate()` creates a new wrapping key pair, so nothing sealed before the wipe can be opened afterwards. `generate` re-reads the header inside its write transaction, so a key sealed to the wiped vault can't land (not tested yet: #54). Wipe doesn't erase what the storage engine has not yet overwritten on disk.
 
 ## 6. Concurrency and crash safety
 
@@ -236,7 +236,7 @@ A transaction ends once control returns to the event loop with no request pendin
 | No lost updates | Readwrite transactions on overlapping stores run one at a time across tabs. Each key is its own record: `generate` adds one and `delete` removes one, so writes from two tabs never overwrite each other. `generate` re-reads the header inside its write transaction and adds only if the header is the one it sealed to; otherwise it redoes the whole operation. It tries 3 times in total, then fails with `unavailable`. | `src/scope.ts` `#commitKeyRecord`, `untilUnchanged`; `concurrency › no lost updates › a generate held while another context generates in the same scope…`, `› a generate held while another context generates in another scope…`, `› a generate held while another context deletes a key of its scope…`; `e2e › concurrent generates from two tabs each store their key, which lists and signs in both tabs` (Chromium, Firefox, WebKit) |
 | Concurrent first-time setup converges | The header is added only if absent, inside the write transaction; the loser redoes against the winner's header, without an error | `src/scope.ts` `#headerForWrite`, `#commitKeyRecord`; `concurrency › concurrent first-time setup › a first generate held while another context runs its first generate…`; `e2e › concurrent first generates from two tabs converge on one vault…` (Chromium, Firefox, WebKit) |
 | A call in flight across `close()` | A vault and its scopes share one connection (`src/connection.ts`), taken right before each transaction, after re-checking `close()` | `vault › a call in flight when the vault is closed fails with InvalidStateError…`, `› scope() after close() throws InvalidStateError…` |
-| A stale context can't undo a wipe | As above: a write sealed to a wiped header fails its check | `src/scope.ts` `#commitKeyRecord`; multi-tab tests not written yet |
+| A stale context can't undo a wipe | As above: a write sealed to a wiped header fails its check | `src/scope.ts` `#commitKeyRecord`; multi-tab tests not written yet (#54) |
 | Other contexts learn about changes | Not built yet | |
 
 ## 7. Public API
@@ -412,7 +412,7 @@ Scopes are what an embedding layer builds on: it chooses the scope from the send
 - **Persistent storage is not requested** (§4.4): the application decides when to ask, and until it does, eviction can lose every sealed key.
 - **One bad record fails all of `list()`** for its scope (fail closed).
 - **A record planted with a made-up key type name reads as `incompatible`, not `corrupted`**: a well-formed name this build doesn't know can't be told from a newer build's type. It still fails closed (§4.2).
-- **A stale context against a wipe (§6) is implemented but not yet tested across tabs**, and other contexts are not notified of changes.
+- **A stale context against a wipe (§6) is implemented but not yet tested across tabs (#54)**, and other contexts are not notified of changes (#55).
 - **Scopes group keys; they do not isolate same-origin code** (§2.3). Any same-origin code can open any scope.
 - **The scopes of a vault can't be listed, and one scope can't be cleared on its own**: `wipe()` is vault-wide, and a scope's keys go one `delete` at a time.
 - **`sign` and `delete` take a key's public information, not an id**: a caller who kept only an id calls `list()` first and passes the matching `KeyInfo`.

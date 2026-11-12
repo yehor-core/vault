@@ -1,5 +1,9 @@
 // Every test that DESIGN.md and README.md cite as `<file> › <title>` must still exist, so a renamed or
 // deleted test can't leave a guarantee pointing at nothing. Whether the test proves the claim stays a review call.
+// Code is checked the same way: `src/<file>.ts` must exist, and the spans right after it, joined only by ",",
+// "and", "then" or "or" (`src/scope.ts` `#commitKeyRecord`, `untilUnchanged`), must be names that file contains.
+// A "not tested" mark names, in its own table cell or sentence, the ticket that will test it (#NN) or says
+// "not protected", so a mark can't outlive the work it waits for unnoticed.
 //
 // Citation forms: `storage › full title`, `storage › describe group › title` (each segment must exist),
 // a title cut short with "…", a parameter written as <field>, cases listed as "a / b / c…", and a bare
@@ -17,6 +21,11 @@ const TEST_TITLE =
 const TEST_CALL = /(?<![.\w])(?:test|it|describe)(?:\.\w+)*[<(]/g;
 const PLACEHOLDER = /%[sdifjo#]|\$\{|\$\w/;
 const CITATION = /^(?:([a-z0-9-]+) )?›\s*(.*)$/;
+const SOURCE_FILE = /^src\/[\w./-]+\.ts$/;
+const IDENTIFIER = /^#?[A-Za-z_$][\w$]*$/;
+const NAME_JOINER = /^\s*(?:,\s*)?(?:(?:and|then|or)\s+)?$/;
+const UNTESTED_MARK = /\bnot (?:yet )?tested\b|\bnot written yet\b/i;
+const MARK_NAMED = /#\d+\b|\bnot protected\b/;
 
 function testFiles(prefix: string): string[] {
   if (prefix === 'e2e') {
@@ -71,13 +80,55 @@ function matches(cited: string, title: string): boolean {
 
 const failures: string[] = [];
 let checked = 0;
+let checkedCode = 0;
+
+/** Whether `source` holds `name` as a whole name: `commitKeyRecord` is not `#commitKeyRecord`. */
+function containsName(source: string, name: string): boolean {
+  const escaped = name.replace(/[$]/g, '\\$&');
+  return new RegExp(`(?<![\\w$#])${escaped}(?![\\w$])`).test(source);
+}
+
+/** Checks the code citations of one line: `parts` is the line split on backticks, so odd parts are code spans. */
+function checkCode(parts: string[], where: string): void {
+  for (let part = 1; part < parts.length; part += 2) {
+    const file = parts[part] ?? '';
+    if (!SOURCE_FILE.test(file)) continue;
+    checkedCode += 1;
+    if (!existsSync(file)) {
+      failures.push(`${where}: \`${file}\` does not exist`);
+      continue;
+    }
+    const source = readFileSync(file, 'utf8');
+    for (let next = part + 2; next < parts.length; next += 2) {
+      const name = parts[next] ?? '';
+      if (!NAME_JOINER.test(parts[next - 1] ?? '') || !IDENTIFIER.test(name)) break;
+      checkedCode += 1;
+      if (!containsName(source, name)) failures.push(`${where}: \`${file}\` has no \`${name}\``);
+    }
+  }
+}
+
+/** A "not tested" mark must name its ticket or say "not protected" in the same table cell or sentence. */
+function checkMarks(line: string, where: string): void {
+  for (const cell of line.split('|')) {
+    for (const sentence of cell.split(/(?<=\.)\s+/)) {
+      const mark = UNTESTED_MARK.exec(sentence);
+      if (mark && !MARK_NAMED.test(sentence)) {
+        failures.push(`${where}: "${mark[0]}" names no ticket (#NN) and does not say "not protected"`);
+      }
+    }
+  }
+}
 
 for (const doc of DOCS) {
   const lines = readFileSync(doc, 'utf8').split('\n');
   lines.forEach((line, index) => {
     const where = `${doc}:${index + 1}`;
     let prefix: string | undefined;
-    const codeSpans = line.split('`').filter((_, part) => part % 2 === 1);
+    const parts = line.split('`');
+    checkCode(parts, where);
+    checkMarks(line, where);
+    const codeSpans = parts.filter((_, part) => part % 2 === 1);
     for (const span of codeSpans) {
       const citation = CITATION.exec(span);
       if (!citation) continue;
@@ -104,8 +155,12 @@ for (const doc of DOCS) {
 
 if (failures.length > 0) {
   console.error(failures.join('\n'));
-  console.error(`\n${failures.length} of ${checked} test citations don't resolve.`);
+  console.error(
+    `\n${failures.length} problems in ${checked} test citations, ${checkedCode} code citations and the "not tested" marks.`,
+  );
   process.exitCode = 1;
 } else {
-  console.log(`${checked} test citations resolve.`);
+  console.log(
+    `${checked} test citations and ${checkedCode} code citations resolve; every "not tested" mark names its ticket.`,
+  );
 }
