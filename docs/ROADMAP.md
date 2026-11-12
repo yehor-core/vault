@@ -36,7 +36,7 @@ Status: done · Spec: #35 · Tickets: #36, #39, #37, #38, #40
 Not included: protection records (S6); validation of the fields S2 adds (S2)
 
 ## S4: Multi-tab
-Status: in progress · Spec: #51 · Tickets: #-
+Status: in progress · Spec: #51 · Tickets: #52, #53, #54, #55
 - concurrent writes without lost updates
 - concurrent first-time setup
 - stale tab can't undo a wipe
