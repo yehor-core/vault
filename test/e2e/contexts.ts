@@ -91,6 +91,20 @@ export async function generate(page: Page): Promise<PageKey> {
   return settled();
 }
 
+/** Wipes the demo's vault from the page's console. */
+export async function wipe(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    // `as`: the global the dev demo sets; undefined fails the call below
+    const { Vault } = globalThis as unknown as { Vault: typeof import('../../src/index.ts').Vault };
+    const vault = await Vault.open();
+    try {
+      await vault.wipe();
+    } finally {
+      vault.close();
+    }
+  });
+}
+
 /** Every key the page lists in the demo scope, each with its signature of `message` made in that page. */
 export async function listAndSign(page: Page, message: string): Promise<(PageKey & { signature: number[] })[]> {
   return page.evaluate(
