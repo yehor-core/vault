@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { webcrypto } from 'node:crypto';
 import {
+  deleteKey,
   generate,
   holdKeyGeneration,
   listAndSign,
@@ -8,6 +9,7 @@ import {
   openDemo,
   startGenerate,
   type PageKey,
+  watchChanges,
   wipe,
 } from './contexts.ts';
 
@@ -90,4 +92,17 @@ test('a generate held in one tab while another tab wipes resolves in a new vault
   expect(meta).toHaveLength(1); // the header is the only record meta holds
   expect(meta).not.toEqual(wipedMeta);
   await expectKeysInEvery([a, b], [key]);
+});
+
+test('a listener in one tab is called after generate, delete and wipe in another tab', async ({ context }) => {
+  const a = await openDemo(context);
+  const b = await openDemo(context);
+  const changes = await watchChanges(b);
+
+  const key = await generate(a);
+  await expect.poll(changes.calls).toBe(1);
+  await deleteKey(a, key);
+  await expect.poll(changes.calls).toBe(2);
+  await wipe(a);
+  await expect.poll(changes.calls).toBe(3);
 });

@@ -91,6 +91,47 @@ export async function generate(page: Page): Promise<PageKey> {
   return settled();
 }
 
+/** Deletes `key` from the demo scope from the page's console. */
+export async function deleteKey(page: Page, key: PageKey): Promise<void> {
+  await page.evaluate(
+    async ({ scope, id }) => {
+      // `as`: the global the dev demo sets; undefined fails the call below
+      const { Vault } = globalThis as unknown as { Vault: typeof import('../../src/index.ts').Vault };
+      const vault = await Vault.open();
+      try {
+        const stored = (await vault.scope(scope).list()).find((listed) => listed.id === id);
+        if (!stored) throw new Error(`no key ${id} to delete`);
+        await vault.scope(scope).delete(stored);
+      } finally {
+        vault.close();
+      }
+    },
+    { scope: DEMO_SCOPE, id: key.id },
+  );
+}
+
+/**
+ * Opens the demo's vault in the page and keeps it open, with a listener on its change notifications.
+ * `calls()` is how many times the listener has been called so far, each with no argument.
+ */
+export async function watchChanges(page: Page): Promise<{ calls: () => number }> {
+  let calls = 0;
+  await page.exposeFunction('vaultChanged', (argumentCount: number) => {
+    expect(argumentCount).toBe(0);
+    calls++;
+  });
+  await page.evaluate(async () => {
+    // `as`: the global the dev demo sets, and the function exposed just above; undefined fails the calls below
+    const { Vault, vaultChanged } = globalThis as unknown as {
+      Vault: typeof import('../../src/index.ts').Vault;
+      vaultChanged: (argumentCount: number) => void;
+    };
+    const vault = await Vault.open();
+    vault.onChange((...args: unknown[]) => vaultChanged(args.length));
+  });
+  return { calls: () => calls };
+}
+
 /** Wipes the demo's vault from the page's console. */
 export async function wipe(page: Page): Promise<void> {
   await page.evaluate(async () => {
