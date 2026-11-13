@@ -6,16 +6,25 @@ import { webcrypto } from 'node:crypto';
 /** The scope the dev demo uses. */
 export const DEMO_SCOPE = 'demo';
 
+/**
+ * The production build of the demo, served by `vite preview` under the GitHub Pages base path (D-93); localhost,
+ * as the dev demo, so the passkey helpers' relying-party id holds for both.
+ */
+export const PUBLISHED_DEMO_URL = 'http://localhost:5175/vault/';
+
 /** A key as it crosses from a page to the test: plain numbers, no typed arrays. */
 export interface PageKey {
   readonly id: string;
   readonly publicKey: number[];
 }
 
-/** A new page of `context` with the dev demo loaded, its `Vault` global ready on the demo's database. */
+/**
+ * A new page of `context` with the demo at the test's `baseURL` loaded: the dev demo, its `Vault` global ready on
+ * the demo's database, or the published build under its base path.
+ */
 export async function openDemo(context: BrowserContext): Promise<Page> {
   const page = await context.newPage();
-  await page.goto('/');
+  await page.goto('./'); // relative, so a baseURL with a path keeps it
   await expect(page.locator('#status')).toHaveText('Ready');
   return page;
 }
