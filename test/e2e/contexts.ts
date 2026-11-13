@@ -1,4 +1,5 @@
 import { expect, type BrowserContext, type Page } from '@playwright/test';
+import { webcrypto } from 'node:crypto';
 
 // Helpers for tests that run two contexts (pages of one browser context) on the dev demo's vault.
 
@@ -130,6 +131,96 @@ export async function watchChanges(page: Page): Promise<{ calls: () => number }>
     vault.onChange((...args: unknown[]) => vaultChanged(args.length));
   });
   return { calls: () => calls };
+}
+
+/** Protects the demo's vault from the page's console; its prompts go to the page's authenticator. */
+export async function protect(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    // `as`: the global the dev demo sets; undefined fails the call below
+    const { Vault } = globalThis as unknown as { Vault: typeof import('../../src/index.ts').Vault };
+    const vault = await Vault.open();
+    try {
+      await vault.protect();
+    } finally {
+      vault.close();
+    }
+  });
+}
+
+/** A failed step of a kept vault: the code of its VaultError. */
+type Failed = { error: string };
+
+/** What a kept vault's `sign` step returns: each key's public key and signature, or the VaultError code. */
+export type SignedKeys = { publicKey: number[]; signature: number[] }[] | Failed;
+
+/**
+ * Opens the demo's vault in `page` and keeps it open, as a tab does: every step runs on that one instance, so an
+ * unlock lasts across steps (D-72). `changes()` counts its onChange calls. A VaultError comes back as its code.
+ */
+export async function keepVault(page: Page): Promise<{
+  state: () => Promise<string | Failed>;
+  unlock: () => Promise<undefined | Failed>;
+  /** Every key of the demo scope, each with its signature of `message`. */
+  sign: (message: string) => Promise<SignedKeys>;
+  changes: () => number;
+}> {
+  let changes = 0;
+  await page.exposeFunction('keptVaultChanged', () => void changes++);
+  await page.evaluate(async () => {
+    // `as`: the global the dev demo sets, and the function exposed just above; undefined fails the calls below
+    const { Vault, keptVaultChanged } = globalThis as unknown as {
+      Vault: typeof import('../../src/index.ts').Vault;
+      keptVaultChanged: () => void;
+    };
+    const vault = await Vault.open();
+    vault.onChange(keptVaultChanged);
+    Object.assign(globalThis, { keptVault: vault });
+  });
+  const step = (step: 'state' | 'unlock' | 'sign', message = '') =>
+    page.evaluate(
+      async ({ step, scope, message }) => {
+        // `as`: keepVault set it just above
+        const { keptVault: vault } = globalThis as unknown as { keptVault: import('../../src/index.ts').Vault };
+        try {
+          if (step === 'state') return await vault.state();
+          if (step === 'unlock') return await vault.unlock();
+          const keys = await vault.scope(scope).list();
+          return await Promise.all(
+            keys.map(async (key) => {
+              const signature = await vault.scope(scope).sign(key, new TextEncoder().encode(message));
+              if (signature.type === 'passkey')
+                throw new Error(`Key ${key.id} is a passkey key; these pages make none`);
+              return { publicKey: Array.from(key.publicKey), signature: Array.from(signature.bytes) };
+            }),
+          );
+        } catch (error) {
+          if (error instanceof Error && error.name === 'VaultError' && 'code' in error)
+            return { error: String(error.code) };
+          throw error;
+        }
+      },
+      { step, scope: DEMO_SCOPE, message },
+    );
+  return {
+    // `as`: each step returns what its branch in the page returns
+    state: () => step('state') as Promise<string | Failed>,
+    unlock: () => step('unlock') as Promise<undefined | Failed>,
+    sign: (message) => step('sign', message) as Promise<SignedKeys>,
+    changes: () => changes,
+  };
+}
+
+/** Ed25519 verification in Node, independent of Vault and of the page. */
+export async function verifies(publicKey: number[], signature: number[], message: string): Promise<boolean> {
+  const key = await webcrypto.subtle.importKey('raw', Uint8Array.from(publicKey), 'Ed25519', false, ['verify']);
+  return webcrypto.subtle.verify('Ed25519', key, Uint8Array.from(signature), new TextEncoder().encode(message));
+}
+
+/** `signed` holds one signature of `message` per key of `keys`, each verifying under its public key. */
+export async function expectKeysSigned(signed: SignedKeys, keys: PageKey[], message: string): Promise<void> {
+  if (!Array.isArray(signed)) throw new Error(`sign failed with ${signed.error}`);
+  expect(signed.map(({ publicKey }) => publicKey).toSorted()).toEqual(keys.map((k) => k.publicKey).toSorted());
+  for (const { publicKey, signature } of signed) expect(await verifies(publicKey, signature, message)).toBe(true);
 }
 
 /** Wipes the demo's vault from the page's console. */

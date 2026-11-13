@@ -1,29 +1,27 @@
 import { expect, test, type Page } from '@playwright/test';
-import { webcrypto } from 'node:crypto';
 import {
   deleteKey,
+  expectKeysSigned,
   generate,
   holdKeyGeneration,
+  keepVault,
+  protect,
   listAndSign,
   metaRecords,
   openDemo,
   startGenerate,
   type PageKey,
+  verifies,
   watchChanges,
   wipe,
 } from './contexts.ts';
+import { addVirtualAuthenticator, answerPromptsFrom, PRF_CHROMIUM_ONLY } from './passkeys.ts';
 
 // Several tabs on one vault (D-43): two pages of one browser context share its IndexedDB, as two tabs do.
 // One interleaving per property; the unit tests in concurrency.test.ts run the others. One key type: the write
 // path never names a type, and the unit tests run every registered one.
 
 const message = 'message to sign';
-
-/** Ed25519 verification in Node, independent of Vault and of the page. */
-async function verifies(publicKey: number[], signature: number[], message: string): Promise<boolean> {
-  const key = await webcrypto.subtle.importKey('raw', Uint8Array.from(publicKey), 'Ed25519', false, ['verify']);
-  return webcrypto.subtle.verify('Ed25519', key, Uint8Array.from(signature), new TextEncoder().encode(message));
-}
 
 /** Each page lists exactly `keys` in the demo scope, and every key signs there with a signature that verifies. */
 async function expectKeysInEvery(pages: Page[], keys: PageKey[]): Promise<void> {
@@ -92,6 +90,32 @@ test('a generate held in one tab while another tab wipes resolves in a new vault
   expect(meta).toHaveLength(1); // the header is the only record meta holds
   expect(meta).not.toEqual(wipedMeta);
   await expectKeysInEvery([a, b], [key]);
+});
+
+test('protect in one tab: the other tab is told, reports locked, unlocks with one prompt and signs', async ({
+  context,
+  browserName,
+}, testInfo) => {
+  testInfo.skip(browserName !== 'chromium', PRF_CHROMIUM_ONLY);
+  const a = await openDemo(context);
+  await addVirtualAuthenticator(a, [], { prf: true });
+  const b = await openDemo(context);
+  const relayed = await answerPromptsFrom(b, a); // one authenticator, as one user's in both tabs
+  const keys = [await generate(a), await generate(b)];
+  const other = await keepVault(b);
+  expect(await other.state()).toBe('unprotected');
+
+  await protect(a);
+
+  await expect.poll(other.changes).toBe(1);
+  expect(await other.state()).toBe('locked');
+  expect(await other.sign(message)).toEqual({ error: 'locked' });
+  expect(relayed.prompts()).toBe(0);
+  expect(await other.unlock()).toBeUndefined();
+  expect(relayed.prompts()).toBe(1);
+  expect(await other.state()).toBe('unlocked');
+  await expectKeysSigned(await other.sign(message), keys, message);
+  expect(relayed.prompts()).toBe(1);
 });
 
 test('a listener in one tab is called after generate, delete and wipe in another tab', async ({ context }) => {
