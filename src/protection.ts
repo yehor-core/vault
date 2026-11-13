@@ -1,8 +1,8 @@
 import { sha256 } from '@noble/hashes/sha2.js';
 import { encode, type Bytes } from './bytes.ts';
 import { VaultError } from './errors.ts';
-import { creationOptions, prompt, readCreated } from './key-types/passkey.ts';
-import { assertOnlyFields, readBytes, type Fields } from './readers.ts';
+import { creationOptions, isUserVerified, noUserVerification, prompt, readCreated } from './key-types/passkey.ts';
+import { assertOnlyFields, corrupted, readBytes, type Fields } from './readers.ts';
 import { IV_LENGTH, P256 } from './seal.ts';
 
 // Passkey protection (D-78, D-81). The one file besides the key types that names a passkey: the unlock passkey
@@ -17,6 +17,8 @@ const SALT_LENGTH = 32;
 const USER_MARK_LENGTH = 16;
 const USER_ID_RANDOM_LENGTH = 16;
 const UNLOCK_NAME = 'Vault unlock';
+/** Nothing checks the unlock challenge: no public key of the unlock passkey is stored; it is random as the spec asks. */
+const UNLOCK_CHALLENGE_LENGTH = 32;
 const PRF_INPUT = encode(DOMAIN_UNLOCK);
 
 /** A protected header's `protection`: the wrapping private key, wrapped under a key derived from the unlock passkey. */
@@ -46,6 +48,34 @@ export function parseUnlockProtection(protection: Fields): UnlockProtection {
     iv: readBytes(protection.iv, `${name}.iv`, IV_LENGTH),
     wrappedPrivateKey: readBytes(protection.wrappedPrivateKey, `${name}.wrappedPrivateKey`),
   };
+}
+
+/** The passkey the user presented to unlock: its credential id, and its PRF result if the authenticator gave one. */
+export interface PresentedUnlock {
+  readonly credentialId: Bytes;
+  readonly secret: CryptoKey | undefined;
+}
+
+/**
+ * D-73: a discoverable prompt, started before any await, with user verification required and the fixed PRF input.
+ * Which passkey answered is checked by the caller, against the header it reads afterwards.
+ */
+export async function presentUnlockPasskey(): Promise<PresentedUnlock> {
+  const publicKey: PublicKeyCredentialRequestOptions = {
+    challenge: crypto.getRandomValues(new Uint8Array(UNLOCK_CHALLENGE_LENGTH)),
+    userVerification: 'required',
+    extensions: { prf: { eval: { first: PRF_INPUT } } },
+  };
+  const pending = navigator.credentials.get({ publicKey }); // the prompt, before any await
+  const credential = await prompt(pending);
+  if (!(credential instanceof PublicKeyCredential) || !(credential.response instanceof AuthenticatorAssertionResponse))
+    throw new VaultError('unavailable', 'The browser returned no passkey assertion');
+  const credentialId = new Uint8Array(credential.rawId);
+  if (!isUserVerified(new Uint8Array(credential.response.authenticatorData)))
+    throw noUserVerification('The presented passkey');
+  const result = credential.getClientExtensionResults().prf?.results?.first;
+  const secret = result === undefined ? undefined : await importSecret(result);
+  return { credentialId, secret };
 }
 
 /**
@@ -88,8 +118,35 @@ export async function protectWrappingKey(
   };
   const wrapped = await crypto.subtle.wrapKey('pkcs8', privateKey, kek, params);
   const wrappedPrivateKey = new Uint8Array(wrapped);
-  const unwrapped = await crypto.subtle.unwrapKey('pkcs8', wrappedPrivateKey, kek, params, P256, false, ['deriveKey']);
+  const unwrapped = await unwrapPrivateKey(kek, params, wrappedPrivateKey);
   return { protection: { kind: UNLOCK_KIND, credentialId, salt, iv, wrappedPrivateKey }, privateKey: unwrapped };
+}
+
+/**
+ * The wrapping private key of a protected header, unwrapped with the unlock passkey's PRF result as a non-extractable
+ * key; `corrupted` if it doesn't open: the AAD binds every other field of the header (D-69, D-81).
+ */
+export async function unwrapWrappingKey(
+  secret: CryptoKey,
+  header: { readonly v: number; readonly wrappingPublicKey: Bytes; readonly protection: UnlockProtection },
+): Promise<CryptoKey> {
+  const { v, wrappingPublicKey, protection } = header;
+  const { credentialId, salt, iv, wrappedPrivateKey } = protection;
+  const kek = await deriveKek(secret, salt);
+  const params: AesGcmParams = {
+    name: 'AES-GCM',
+    iv,
+    additionalData: protectionAad(v, wrappingPublicKey, credentialId, salt),
+  };
+  try {
+    return await unwrapPrivateKey(kek, params, wrappedPrivateKey); // await: so catch sees it
+  } catch (cause) {
+    throw corrupted('header.protection does not decrypt', cause);
+  }
+}
+
+function unwrapPrivateKey(kek: CryptoKey, params: AesGcmParams, wrappedPrivateKey: Bytes): Promise<CryptoKey> {
+  return crypto.subtle.unwrapKey('pkcs8', wrappedPrivateKey, kek, params, P256, false, ['deriveKey']);
 }
 
 /** AES-GCM associated data of the wrapped private key: every other field of the header (D-81). */

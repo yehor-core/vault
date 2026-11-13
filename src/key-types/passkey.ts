@@ -226,12 +226,22 @@ function checkAssertion(
   if (!equalBytes(assertion.credentialId, credentialId)) return 'the assertion is for another credential';
   const flags = assertion.authenticatorData[FLAGS_OFFSET];
   if (flags === undefined) return 'the assertion has no flags';
-  if ((flags & FLAG_UV) === 0)
-    throw new VaultError('unsupported', `${subject}: the authenticator answered with no user verification`);
+  if ((flags & FLAG_UV) === 0) throw noUserVerification(subject);
   const clientData = parseClientData(assertion.clientDataJSON);
   if (clientData?.type !== 'webauthn.get' || clientData.challenge !== base64url(challenge))
     return "the assertion's client data is not for this signature";
   return undefined;
+}
+
+/** D-59: an assertion answered without user verification, by the passkey `subject` names. */
+export function noUserVerification(subject: string): VaultError {
+  return new VaultError('unsupported', `${subject}: the authenticator answered with no user verification`);
+}
+
+/** Whether `authenticatorData` has its UV flag set; data too short to hold the flags has not. */
+export function isUserVerified(authenticatorData: Bytes): boolean {
+  const flags = authenticatorData[FLAGS_OFFSET];
+  return flags !== undefined && (flags & FLAG_UV) !== 0;
 }
 
 /** What the authenticator signed: authenticatorData ‖ SHA-256(clientDataJSON), and the signature. */

@@ -415,9 +415,23 @@ describe.each(keyTypeCases)('$type', ({ type, publicKeyLength, signatureLength, 
     test('a closed vault rejects every call', async () => {
       const { vault, scope } = await openVault();
       const key = await scope.generate(type);
+      // A prompt would end at once, as a declined one: unlock must not get that far. WebKit's test page has no
+      // navigator.credentials, so a prompt there would throw TypeError.
+      const get = navigator.credentials
+        ? vi.spyOn(navigator.credentials, 'get').mockRejectedValue(new DOMException('', 'NotAllowedError'))
+        : undefined;
       vault.close();
-      const calls = [scope.generate(type), scope.list(), scope.sign(key, message), scope.delete(key), vault.wipe()];
+      const calls = [
+        scope.generate(type),
+        scope.list(),
+        scope.sign(key, message),
+        scope.delete(key),
+        vault.wipe(),
+        vault.unlock(),
+      ];
       for (const call of calls) await expect(call).rejects.toMatchObject({ name: 'InvalidStateError' });
+      expect(() => vault.lock()).toThrow(expect.objectContaining({ name: 'InvalidStateError' }));
+      if (get) expect(get).not.toHaveBeenCalled();
     });
 
     test('sign rejects data that is not a Uint8Array instead of signing something else', async () => {
