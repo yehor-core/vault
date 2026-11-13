@@ -102,10 +102,6 @@ private key (one per key record), sealed by ECIES:
 
 ### 3.2 Passkey keys
 
-<!--
-Fresh device: how the user presents the passkey and Vault identifies which key it is.
--->
-
 - **Model.** A passkey key is the key type `passkey`: a WebAuthn credential whose private key stays in its authenticator, a platform passkey or a security key, which the user picks. `scope.generate('passkey', { label })` creates one with one prompt and records its public information; `sign` gets an assertion from it with one prompt (§7.4). Vault never holds the private key, so the record has nothing sealed, and the key is the same in either protection mode. Only ES256 (ECDSA on P-256) is requested: Apple passkeys support nothing else, and Safari returns no public key for the other algorithms (`src/key-types/passkey.ts` `creationOptions`). The credential is discoverable (`residentKey: 'required'`), so a vault that has never seen it can find it: adding a key, below. Several passkey keys coexist in one scope: `passkey › generate › the user handle is the scope mark and 16 fresh random bytes, so a second key never overwrites the first`, and end to end `e2e › several passkey keys in one scope list, and each signs on its own, verifying only under its own public key`. The `passkey ›` tests run in Chromium only, the one engine with a virtual authenticator to drive. The e2e tests in `test/e2e/passkey.spec.ts` run in all three engines, Firefox and WebKit against Playwright's JavaScript stand-in for `navigator.credentials` (§8): generate and sign, verified outside Vault (`e2e › a passkey key generated in the page signs, and its assertion verifies outside Vault under the returned public key`), and the fresh device (`e2e › a passkey moved to a new browser context with an empty vault is added there with the same id and public key, then signs`).
 - **User verification.** Creation and every assertion ask for `userVerification: 'required'`, and Vault checks the UV flag of every assertion before returning a signature, since the browser and the authenticator are not trusted to enforce it. An assertion without the UV flag is `unsupported`, not `corrupted`: storage is fine, the authenticator is not up to the task. `passkey › sign › Vault checks each assertion before returning it › an assertion without user verification is unsupported`, `passkey › an authenticator without user verification › a sign answered without user verification is unsupported…`.
 - **What is stored.** The credential id, the public key in SPKI as the browser returned it at creation, and the fields every key has (§4.1). The key id hashes scope, type and the credential id, so the key has the same id on every device. The user handle (`user.id`) is the scope mark, the first 16 bytes of SHA-256 over a domain separator and the scope name, then 16 fresh random bytes: an authenticator keeps one credential per site and user handle and overwrites the older one, so a fresh handle per key keeps every new passkey from destroying another. The mark lets adding a key refuse a passkey of another scope.
@@ -541,9 +537,15 @@ Protection's PRF paths are tested only in Chromium, the one engine with a test a
 
 ## 9. Embedding for other origins (not built)
 
-Scopes are what an embedding layer builds on: it chooses the scope from the sender's origin, which is why a scope name holds up to 1024 code units. The layer itself is not described yet.
+How another site would reach Vault. Described here, not built.
 
-<!-- Popup or iframe: the choice, why, and what we give up (storage partitioning, gesture/permission policy, messaging protocol). -->
+- **A popup.** A click on the consumer's site opens a popup, a top-level window of the vault's origin, and the two windows talk over `postMessage`. A top-level window sees the same database as the vault opened directly, in every engine, and WebAuthn runs in it same-origin, with no Permissions Policy for the consumer to grant.
+- **The scope comes from the sender.** The layer checks `event.origin` of every message and derives the scope from it; the consumer never names one. That keeps consumers apart, since no key operation crosses scopes (`vault › scopes › a key passed to another scope is a TypeError…`). A scope name holds up to 1024 code units, long enough for any origin.
+- **No `Cross-Origin-Opener-Policy: same-origin` on the vault's origin.** It would cut the opener link, and `postMessage` with it. A consumer that sends COOP itself uses `same-origin-allow-popups`.
+- **Given up.** A window opens for each interaction; `window.open` needs a click, or the popup blocker stops it; the layer owns a messaging protocol (requests, replies, errors as `{ code, message }`, a window closed mid-request).
+- **Rejected: an iframe.** IndexedDB in a cross-site iframe is partitioned by top-level site in Chromium, Firefox and Safari, so each consumer would see a vault of its own, not the user's one vault. Only Chromium reaches unpartitioned IndexedDB from the iframe, through a Storage Access API prompt that is denied unless the user has visited the vault's site top-level before; in Firefox and Safari that API unpartitions cookies only. Safari also makes third-party IndexedDB ephemeral, and is not known to allow WebAuthn `create()` in a cross-origin iframe (unconfirmed for Safari 27).
+- **Rejected: an iframe for prompt-free calls, a popup for prompts.** The iframe's partitioned database is not the popup's, so a key generated in one is missing from the other.
+- **Unconfirmed.** Chromium proposed in 2023 to give a popup with a live opener storage of its own ("Opener Storage Partitioning"), which would break the popup's one database; it did not ship then, and its status now is unknown.
 
 ## 10. Alternatives considered and rejected
 
