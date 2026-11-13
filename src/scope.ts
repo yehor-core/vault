@@ -26,6 +26,7 @@ import {
   type KeyRecord,
 } from './records.ts';
 import { generateWrappingKey } from './seal.ts';
+import type { Unlock } from './unlock.ts';
 import {
   addHeader,
   addKeyRecord,
@@ -78,12 +79,14 @@ export class Scope {
   readonly #name: string;
   readonly #connection: Connection;
   readonly #changes: Changes;
+  readonly #unlock: Unlock;
 
   /** @internal Use `vault.scope(name)`. */
-  constructor(name: string, connection: Connection, changes: Changes) {
+  constructor(name: string, connection: Connection, changes: Changes, unlock: Unlock) {
     this.#name = name;
     this.#connection = connection;
     this.#changes = changes;
+    this.#unlock = unlock;
   }
 
   // A getter, not a field: a writable name would let code holding this Scope retarget it at another scope.
@@ -197,8 +200,8 @@ export class Scope {
     return value === undefined ? undefined : parseKeyRecord(value);
   }
 
-  /** The header and the parsed record of key `id`, read in one transaction. */
-  async #loadKey(id: string): Promise<{ header: HeaderRecord; record: KeyRecord }> {
+  /** The header and the parsed record of key `id`, read in one transaction, and how this context opens it. */
+  async #loadKey(id: string): Promise<StoredKey> {
     const { header, value } = await this.#connection.transact([META_STORE, KEYS_STORE], 'readonly', async (tx) => {
       const header = await readHeader(tx);
       const value = await getKeyRecord(tx, this.#name, id);
@@ -206,7 +209,7 @@ export class Scope {
     });
     if (value === undefined || !header) throw new VaultError('not-found', `No key ${id}`);
     const record = await parseKeyRecord(value);
-    return { header, record };
+    return { header, record, wrappingPrivateKey: () => this.#unlock.wrappingPrivateKey(header) };
   }
 
   /**

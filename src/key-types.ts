@@ -79,6 +79,8 @@ export interface PresentedKey<Part extends object = object> {
 export interface StoredKey<Part extends object = object> {
   readonly record: KeyFields & Part;
   readonly header: HeaderRecord;
+  /** The private key that opens keys sealed to `header`, as this context holds it; only a sealed key asks. */
+  wrappingPrivateKey(): CryptoKey;
 }
 
 export const keyTypes = { ed25519, secp256k1, passkey } satisfies Record<string, KeyType>;
