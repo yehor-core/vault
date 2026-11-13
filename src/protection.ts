@@ -77,9 +77,9 @@ export interface PresentedUnlock {
  * against the header it reads afterwards (D-77).
  */
 export async function presentUnlockPasskey(credentialId: Bytes): Promise<PresentedUnlock> {
-  const { result, ...answered } = await assertUnlock(credentialId);
+  const { credentialId: answeredBy, result } = await assertUnlock(credentialId);
   const secret = result === undefined ? undefined : await importSecret(result);
-  return { credentialId: answered.credentialId, secret };
+  return { credentialId: answeredBy, secret };
 }
 
 /**

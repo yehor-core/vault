@@ -46,7 +46,12 @@ export class Vault {
     try {
       await readHeaderInto(connection, vault.#unlock); // names the unlock credential for unlock()'s prompt (D-94)
     } catch (error) {
-      if (!(error instanceof VaultError)) throw error; // unlock() reads it again and reports it
+      // A storage failure here (corrupted, incompatible, unavailable) is reported by the next call that reads the
+      // header, as before open() read it; unlock() reads it again too, with no prompt
+      if (!(error instanceof VaultError)) {
+        vault.close();
+        throw error;
+      }
     }
     return vault;
   }
@@ -110,8 +115,7 @@ export class Vault {
    */
   async unlock(): Promise<void> {
     if (this.#connection.closed) throw closedError(); // before the prompt: a closed vault prompts for nothing
-    const pending = unlockVault(this.#connection, this.#unlock); // the prompt, before any await
-    await pending;
+    await unlockVault(this.#connection, this.#unlock); // its prompt starts before its first await
   }
 
   /** Locks this context: sealed keys fail `sign` with `locked` until `unlock()`. Other contexts are unaffected. */

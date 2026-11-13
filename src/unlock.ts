@@ -41,6 +41,11 @@ export class Unlock {
     if (this.#heldFor(header) === undefined) this.#held = undefined;
   }
 
+  /** Forgets the unlock credential: the last header read failed. */
+  forgetCredential(): void {
+    this.#credentialId = undefined;
+  }
+
   /** Whether this context opens the keys of the stored `header` (undefined: the vault is empty) with a held key. */
   isUnlocked(header: HeaderRecord | undefined): boolean {
     return this.#heldFor(header) !== undefined;
@@ -61,9 +66,18 @@ export class Unlock {
   }
 }
 
-/** Reads the stored header and takes it in (`Unlock.see`); undefined: the vault is empty. */
+/**
+ * Reads the stored header and takes it in (`Unlock.see`); undefined: the vault is empty. A read that fails forgets the
+ * unlock credential, so `unlock()` reads again, with no prompt, and reports the failure (D-94).
+ */
 export async function readHeaderInto(connection: Connection, unlock: Unlock): Promise<HeaderRecord | undefined> {
-  const header = await connection.transact([META_STORE, KEYS_STORE], 'readonly', readHeader);
+  let header: HeaderRecord | undefined;
+  try {
+    header = await connection.transact([META_STORE, KEYS_STORE], 'readonly', readHeader);
+  } catch (error) {
+    unlock.forgetCredential();
+    throw error;
+  }
   unlock.see(header);
   return header;
 }
@@ -77,7 +91,7 @@ export async function unlockVault(connection: Connection, unlock: Unlock): Promi
   const asked = unlock.credentialId;
   if (asked === undefined) {
     await readHeaderInto(connection, unlock); // a malformed header fails here, corrupted
-    throw new VaultError('not-found', 'The last header read named no unlock credential');
+    throw new VaultError('not-found', "This instance's previous header read named no unlock credential");
   }
   const pending = presentUnlockPasskey(asked); // the prompt, before any await
   let presented: PresentedUnlock;

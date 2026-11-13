@@ -248,7 +248,7 @@ describe.runIf(hasVirtualAuthenticator)('protect, with the PRF result at creatio
     expect(keys).toEqual([]);
   });
 
-  test('protect on a protected vault fails with protected, not retryable, and changes nothing, unlocked or locked', async () => {
+  test('protect on a protected vault fails with protected, not retryable, and changes nothing, unlocked or locked; the locked instance then unlocks with one prompt', async () => {
     const [first, second] = await openContexts();
     await first.scope.generate('ed25519');
     await first.vault.protect();
@@ -258,6 +258,9 @@ describe.runIf(hasVirtualAuthenticator)('protect, with the PRF result at creatio
     await expectVaultError(second.vault.protect(), 'protected');
 
     expect(await readAll(first.name)).toEqual(before);
+    const get = vi.spyOn(navigator.credentials, 'get');
+    await second.vault.unlock(); // protect's read of the protected header named the unlock passkey (D-94)
+    expect(get).toHaveBeenCalledTimes(1);
   });
 });
 
