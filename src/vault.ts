@@ -1,7 +1,7 @@
 import { Changes } from './changes.ts';
 import { closedError, Connection } from './connection.ts';
 import { protectVault } from './protect.ts';
-import { createUnlockPasskey, presentUnlockPasskey } from './protection.ts';
+import { createUnlockPasskey, presentUnlockPasskey, protectionSupport } from './protection.ts';
 import { isScopeName, MAX_SCOPE_NAME_LENGTH } from './records.ts';
 import { Scope } from './scope.ts';
 import { clearAll, KEYS_STORE, META_STORE, readHeader } from './storage.ts';
@@ -35,6 +35,15 @@ export class Vault {
     const connection = new Connection(name);
     await connection.open();
     return new Vault(connection, new Changes(name)); // the channel opens only for a vault that opened
+  }
+
+  /**
+   * Whether `protect()` can work here, as far as the page tells without a prompt: `unsupported` when it has no
+   * WebAuthn or the browser reports no PRF extension; otherwise `unknown`, and only `protect()` tells for sure (the
+   * authenticator the user picks may still lack PRF). Never `supported`. Opens no vault and shows no prompt.
+   */
+  static protectionSupport(): Promise<'unsupported' | 'unknown'> {
+    return protectionSupport();
   }
 
   /**

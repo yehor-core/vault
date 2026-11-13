@@ -50,6 +50,23 @@ export function parseUnlockProtection(protection: Fields): UnlockProtection {
   };
 }
 
+/**
+ * D-75: `unsupported` when the page has no WebAuthn or the browser says it lacks PRF; else `unknown`, as a browser
+ * that reports `extension:prf` true says nothing of the authenticator the user will pick. No prompt, no storage.
+ */
+export async function protectionSupport(): Promise<'unsupported' | 'unknown'> {
+  // Playwright's WebKit on Linux has a PublicKeyCredential that is no constructor, and no navigator.credentials
+  if (typeof PublicKeyCredential !== 'function' || navigator.credentials === undefined) return 'unsupported';
+  if (typeof PublicKeyCredential.getClientCapabilities !== 'function') return 'unknown';
+  let capabilities: PublicKeyCredentialClientCapabilities;
+  try {
+    capabilities = await PublicKeyCredential.getClientCapabilities();
+  } catch {
+    return 'unknown'; // the browser didn't answer; protect() still tells
+  }
+  return capabilities['extension:prf'] === false ? 'unsupported' : 'unknown';
+}
+
 /** The passkey the user presented to unlock: its credential id, and its PRF result if the authenticator gave one. */
 export interface PresentedUnlock {
   readonly credentialId: Bytes;
