@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, expectTypeOf, test, vi } from 'vitest';
 import { keyTypes, type AddableKeyTypeName } from '../../src/key-types.ts';
-import { Vault, type KeyInfo, type Scope, type Signature } from '../../src/index.ts';
+import { Vault, type KeyInfo, type Scope, type Signature, type VaultState } from '../../src/index.ts';
 import {
   asSealed,
   cleanup,
@@ -317,6 +317,46 @@ describe.each(keyTypeCases)('$type', ({ type, publicKeyLength, signatureLength, 
       expect(keys).toHaveLength(2);
     });
 
+    // D-40: an application that expects protection checks state() before generate, so an evicted vault isn't refilled unprotected.
+    test('state() is empty for a never-used, wiped or deleted vault and unprotected after the first generate', async () => {
+      const { vault, scope, name } = await openVault();
+      expect(await vault.state()).toBe('empty');
+      expect(await readAll(name)).toEqual({ meta: [], keys: [] });
+
+      await scope.generate(type);
+      expect(await vault.state()).toBe('unprotected');
+
+      await vault.wipe();
+      expect(await vault.state()).toBe('empty');
+
+      await scope.generate(type);
+      await done(indexedDB.deleteDatabase(name));
+      expect(await vault.state()).toBe('empty');
+      expect(await readAll(name)).toEqual({ meta: [], keys: [] }); // state() writes nothing
+    });
+
+    // D-12: a deleted header is never read as an empty vault, so state() can't report a protected vault as empty.
+    test('state() fails with corrupted, as list does, for key records without a header and for a malformed header', async () => {
+      const { vault, scope, name } = await openVault();
+      await scope.generate(type);
+      const header = await readHeader(name);
+
+      await writeHeader(name, { ...header, v: '1' });
+      await expectVaultError(vault.state(), 'corrupted');
+      await expectVaultError(scope.list(), 'corrupted');
+
+      await deleteHeader(name);
+      await expectVaultError(vault.state(), 'corrupted');
+      await expectVaultError(scope.list(), 'corrupted');
+    });
+
+    test('state() after close() throws InvalidStateError', async () => {
+      const { vault, scope } = await openVault();
+      await scope.generate(type);
+      vault.close();
+      await expect(vault.state()).rejects.toMatchObject({ name: 'InvalidStateError' });
+    });
+
     // Clearing site data, eviction and another tab's deleteDatabase all delete the database under an open vault.
     test('a database deleted while the vault is open is an empty vault: list returns no keys and generate creates a new vault', async () => {
       const { scope, name } = await openVault();
@@ -527,6 +567,12 @@ type SealedKeyInfo<T> = {
 };
 type SealedSignature<T> = { readonly type: T; readonly bytes: Uint8Array<ArrayBuffer> };
 const signPasskey = (scope: Scope, key: KeyInfo<'passkey'>) => scope.sign(key, message);
+
+// D-65: one union, so an unprotected vault that is unlocked can't be expressed. locked and unlocked arrive with protect().
+test('state() returns exactly empty, unprotected, locked or unlocked', () => {
+  expectTypeOf<ReturnType<Vault['state']>>().toEqualTypeOf<Promise<'empty' | 'unprotected' | 'locked' | 'unlocked'>>();
+  expectTypeOf<VaultState>().toEqualTypeOf<'empty' | 'unprotected' | 'locked' | 'unlocked'>();
+});
 
 // Adding an existing key exists only for key types that can (D-55).
 test('add accepts only key types that can add an existing key, and returns that type’s KeyInfo', () => {
