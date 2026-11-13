@@ -1,8 +1,7 @@
 name: Pages
 
-# Publishes the demo over HTTPS on GitHub Pages (D-90): built under the repository's Pages base path, as
-# `npm run build:demo` does and test/e2e/pages.spec.ts checks. Only a push to main deploys; a pull request doesn't.
-# One-time setup by the repository owner: Settings → Pages → Source: GitHub Actions.
+# Publishes the demo over HTTPS on GitHub Pages (D-90). Only a push to main deploys, so a pull request can't
+# publish an unreviewed page.
 on:
   push:
     branches: [main]

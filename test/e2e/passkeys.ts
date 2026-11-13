@@ -1,7 +1,7 @@
 import { expect, type Browser, type BrowserContext, type CDPSession, type Page } from '@playwright/test';
 import { createHash, createPrivateKey, createPublicKey, verify } from 'node:crypto';
 import type { VaultErrorCode } from '../../src/index.ts';
-import { DEMO_SCOPE, openDemo, type PageKey } from './contexts.ts';
+import { DEMO_SCOPE, fromHex, openDemo, type PageKey } from './contexts.ts';
 
 // Passkey authenticators for e2e tests (D-62): Chromium's own WebAuthn through a CDP virtual authenticator; in
 // Firefox and WebKit, Playwright's JavaScript stand-in, which always signs ES256 with UP and UV.
@@ -181,6 +181,17 @@ export interface PageAssertion {
   readonly authenticatorData: number[];
   readonly clientDataJSON: number[];
   readonly signature: number[];
+}
+
+/** The assertion the demo shows in #output after signing with a passkey key. */
+export async function shownAssertion(page: Page): Promise<PageAssertion> {
+  const output = page.locator('#output');
+  const bytes = async (name: string) => Array.from(fromHex(await output.getAttribute(name)));
+  return {
+    authenticatorData: await bytes('data-authenticator-data'),
+    clientDataJSON: await bytes('data-client-data-json'),
+    signature: await bytes('data-signature'),
+  };
 }
 
 // The page functions below rethrow a VaultError as `VaultError <code>: …`: page.evaluate keeps only the message.

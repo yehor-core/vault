@@ -6,7 +6,7 @@ A browser-native private-key store on top of IndexedDB. Design: [DESIGN.md](DESI
 
 ## Demo
 
-Live at https://yehor-core.github.io/vault/, over HTTPS, without cloning the repository: `.github/workflows/pages.yml` builds it with `npm run build:demo` and deploys it to GitHub Pages on every push to `main`. Locally, `npm run demo` serves the same page on localhost.
+Live at https://yehor-core.github.io/vault/, over HTTPS, without cloning the repository: `.github/workflows/pages.yml` builds it with `npm run build:demo` and deploys it to GitHub Pages on every push to `main` (one-time setup by the repository owner: Settings → Pages → Source: GitHub Actions). Locally, `npm run demo` serves the same page on localhost.
 
 Passkeys made on the Pages demo and on localhost are different credentials: their relying-party ids differ (`yehor-core.github.io` and `localhost`), so a passkey from one can't be added or used on the other.
 

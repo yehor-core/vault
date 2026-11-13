@@ -12,6 +12,12 @@ export const DEMO_SCOPE = 'demo';
  */
 export const PUBLISHED_DEMO_URL = 'http://localhost:5175/vault/';
 
+/** The bytes of a hex string the demo writes into a data attribute; a missing attribute fails the test. */
+export function fromHex(hex: string | null): Uint8Array<ArrayBuffer> {
+  if (hex === null) throw new Error('attribute missing');
+  return Uint8Array.from(hex.match(/../g) ?? [], (byte) => parseInt(byte, 16));
+}
+
 /** A key as it crosses from a page to the test: plain numbers, no typed arrays. */
 export interface PageKey {
   readonly id: string;

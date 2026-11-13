@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  fromHex,
   generate as generateInConsole,
   openDemo,
   protect as protectInConsole,
@@ -17,14 +18,9 @@ import {
   openWithAuthenticator,
   PRF_CHROMIUM_ONLY,
   shortenPromptTimeouts,
+  shownAssertion,
   verifiesOutsideVault,
-  type PageAssertion,
 } from './passkeys.ts';
-
-function fromHex(hex: string | null): Uint8Array<ArrayBuffer> {
-  if (hex === null) throw new Error('attribute missing');
-  return Uint8Array.from(hex.match(/../g) ?? [], (byte) => parseInt(byte, 16));
-}
 
 /** OpenSSL's verdict on a secp256k1 signature (64 bytes r ‖ s) of `message` under a compressed public key. */
 function opensslVerifies(publicKey: Uint8Array, signature: Uint8Array, message: string): boolean {
@@ -175,17 +171,6 @@ test('the dev demo exposes Vault to the console: a key generated there is listed
   await page.click('#wipe');
   await expect(page.locator('#keys tr')).toHaveCount(0);
 });
-
-/** The assertion the demo shows in #output after signing with a passkey key. */
-async function shownAssertion(page: Page): Promise<PageAssertion> {
-  const output = page.locator('#output');
-  const bytes = async (name: string) => Array.from(fromHex(await output.getAttribute(name)));
-  return {
-    authenticatorData: await bytes('data-authenticator-data'),
-    clientDataJSON: await bytes('data-client-data-json'),
-    signature: await bytes('data-signature'),
-  };
-}
 
 test('demo generates a labelled passkey key, lists it with its type, label and credential id, and signs with it', async ({
   context,

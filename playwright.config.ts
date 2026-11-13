@@ -13,7 +13,7 @@ export default defineConfig({
     },
     // The production build under the GitHub Pages base path, for test/e2e/pages.spec.ts (D-93).
     {
-      command: 'npm run build:demo && npm run preview:demo -- --port 5175 --strictPort',
+      command: `npm run build:demo && npm run preview:demo -- --port ${new URL(PUBLISHED_DEMO_URL).port} --strictPort`,
       url: PUBLISHED_DEMO_URL,
     },
   ],
