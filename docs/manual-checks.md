@@ -52,6 +52,8 @@ The YubiKey has firmware 5.4.3 and a FIDO2 PIN set. Firmware 5.4.3 has `hmac-sec
 
 At `protect()`, one prompt means the creation returned the PRF result; two mean it returned only `prf.enabled: true` and Vault asked for the new passkey again at once. With the YubiKey it is two in every browser that has security-key PRF. Whether iCloud Keychain returns the PRF result at creation is unconfirmed; the iCloud Keychain runs answer it, and either count is a correct path. Safari 18.6 has no PRF for security keys (it shipped in Safari 26.4), so `protect()` fails with `unsupported` after the creation and steps 7 to 10 are skipped.
 
+At `unlock()`, one prompt in every pair: it asks for the stored unlock passkey by its credential id, the request `protect()`'s second prompt makes. Firefox × YubiKey: 2 prompts at `protect()`, 1 at `unlock()`. Before #108, `unlock()` made a discoverable request, which Firefox × YubiKey answers with no PRF result, so step 8 failed with `unsupported`.
+
 ## Checklist
 
 Before the run:
@@ -69,7 +71,7 @@ In each prompt, pick the pair's authenticator: iCloud Keychain, or the security 
 | 5. Generate an ed25519 key and sign | Back in the first profile: Key type `ed25519`, Generate key, then its row's Sign | No prompt; `verified   true` |
 | 6. Protect | Protect with a passkey | State `unlocked`, status `Ready`, both keys still listed; Sign of the ed25519 key: no prompt, `verified   true`. Safari 18.6 × YubiKey: status `VaultError unsupported: …`, State `unprotected`, both keys listed, and the ed25519 key still signs |
 | 7. Reload: locked | Reload the page | State `locked`; both keys listed |
-| 8. Unlock | Unlock, pick the unlock passkey (`Vault unlock` in the dialog) | State `unlocked`; Sign of the ed25519 key: no prompt, `verified   true` |
+| 8. Unlock | Unlock; the dialog asks for the unlock passkey only (`Vault unlock`, if it names one) | State `unlocked`; Sign of the ed25519 key: no prompt, `verified   true` |
 | 9. Lock | Lock | State `locked`, no prompt |
 | 10. Sign with a sealed key while locked | The ed25519 row's Sign | No prompt; status `VaultError locked: …`; Last signature unchanged; State `locked` |
 | 11. Cancelled prompt | Unlock, then cancel the dialog. Safari 18.6 × YubiKey (vault not protected): the passkey row's Sign, then cancel | Status `VaultError cancelled: …`; State as before (`locked`; `unprotected` for Safari 18.6 × YubiKey); both keys listed |

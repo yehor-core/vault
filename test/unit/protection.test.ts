@@ -199,6 +199,7 @@ describe.runIf(hasVirtualAuthenticator)('protect, with the PRF result at creatio
     const prf = recordPrfResults();
 
     await first.vault.protect();
+    await second.vault.state(); // an application shows Unlock after reading the state (D-94)
     await second.vault.unlock();
 
     expect(prf.copies).toHaveLength(2);
@@ -376,6 +377,7 @@ describe.runIf(hasVirtualAuthenticator)('protect, with no PRF result at creation
     const [first, second] = await openContexts();
     const key = asSealed(await first.scope.generate('secp256k1')); // any sealed type: it shows the unlock works
     await first.vault.protect();
+    await second.vault.state(); // an application shows Unlock after reading the state (D-94)
     const get = vi.spyOn(navigator.credentials, 'get');
 
     await second.vault.unlock();
@@ -383,6 +385,25 @@ describe.runIf(hasVirtualAuthenticator)('protect, with no PRF result at creation
     expect(get).toHaveBeenCalledTimes(1);
     expect(await second.vault.state()).toBe('unlocked');
     await expect(second.scope.sign(key, message)).resolves.toMatchObject({ type: 'secp256k1' });
+  });
+
+  test('where the browser returns a PRF result only to a prompt restricted to a passkey, protect and then unlock in a new instance succeed (Firefox with a security key)', async () => {
+    const { vault, scope, name } = await openVault();
+    const key = asSealed(await scope.generate('ed25519')); // any sealed type: it shows the unlock works
+    const get = prfOnlyWhenRestricted();
+    await vault.protect();
+    const reopened = await Vault.open({ name });
+    try {
+      const calls = get.mock.calls.length;
+
+      await reopened.unlock();
+
+      expect(get.mock.calls.length - calls).toBe(1);
+      expect(await reopened.state()).toBe('unlocked');
+      await expect(reopened.scope(TEST_SCOPE).sign(key, message)).resolves.toMatchObject({ type: 'ed25519' });
+    } finally {
+      reopened.close();
+    }
   });
 
   /** Each failure of the second prompt, set up on a vault whose `scope` the test then protects. */
@@ -530,6 +551,20 @@ function holdPrompt(): () => void {
   return gate.resolve;
 }
 
+/**
+ * From here on, an assertion of a discoverable prompt (no `allowCredentials`) carries no PRF result, as Firefox with a
+ * security key without `hmac-secret-mc` answers (#108). An injected failure: the result itself is the authenticator's.
+ */
+function prfOnlyWhenRestricted() {
+  const original = CredentialsContainer.prototype.get;
+  return vi.spyOn(navigator.credentials, 'get').mockImplementation(async (options?: CredentialRequestOptions) => {
+    const credential = await original.call(navigator.credentials, options);
+    if (credential && !options?.publicKey?.allowCredentials?.length)
+      Object.defineProperty(credential, 'getClientExtensionResults', { value: () => ({ prf: {} }) });
+    return credential;
+  });
+}
+
 /** Gives the next `get` prompt a short timeout: with presence off, it then ends as a declined prompt does. */
 function shortGetTimeout() {
   const original = CredentialsContainer.prototype.get;
@@ -566,23 +601,29 @@ describe.runIf(hasVirtualAuthenticator)('unlock and lock', () => {
     await cleanup();
   });
 
-  test('unlock starts a discoverable prompt before its first await, user verification required, with the fixed PRF input', async () => {
-    const [first, second] = await openContexts();
-    await first.vault.protect();
-    const get = vi.spyOn(navigator.credentials, 'get');
+  test('unlock starts a prompt for the stored unlock passkey only before its first await, user verification required, with the fixed PRF input', async () => {
+    const { vault, name } = await openVault();
+    await vault.protect();
+    const second = await Vault.open({ name }); // opened after protect: its header read names the unlock passkey
+    try {
+      const get = vi.spyOn(navigator.credentials, 'get');
 
-    const pending = second.vault.unlock();
-    expect(get).toHaveBeenCalledTimes(1);
-    await pending;
+      const pending = second.unlock();
+      expect(get).toHaveBeenCalledTimes(1);
+      await pending;
 
-    const options = get.mock.calls[0]?.[0]?.publicKey;
-    expect(options).toMatchObject({
-      userVerification: 'required',
-      extensions: { prf: { eval: { first: UNLOCK_PRF_INPUT } } },
-    });
-    expect(options).not.toHaveProperty('allowCredentials');
-    expect(options?.challenge).toHaveProperty('byteLength', 32);
-    expect(await second.vault.state()).toBe('unlocked');
+      const options = get.mock.calls[0]?.[0]?.publicKey;
+      expect(options).toMatchObject({
+        allowCredentials: [{ type: 'public-key', id: await unlockPasskeyId(name) }],
+        userVerification: 'required',
+        extensions: { prf: { eval: { first: UNLOCK_PRF_INPUT } } },
+      });
+      expect(options?.allowCredentials?.[0]).not.toHaveProperty('transports');
+      expect(options?.challenge).toHaveProperty('byteLength', 32);
+      expect(await second.state()).toBe('unlocked');
+    } finally {
+      second.close();
+    }
   });
 
   describe.each(keyTypeCases)('$type', ({ type, verify }) => {
@@ -594,6 +635,7 @@ describe.runIf(hasVirtualAuthenticator)('unlock and lock', () => {
       ];
       const passkeyKey = await first.scope.generate('passkey');
       await first.vault.protect();
+      await second.vault.state(); // an application shows Unlock after reading the state (D-94)
       const get = vi.spyOn(navigator.credentials, 'get');
       pickPasskey(await unlockPasskeyId(first.name));
 
@@ -620,6 +662,7 @@ describe.runIf(hasVirtualAuthenticator)('unlock and lock', () => {
       const [first, second] = await openContexts();
       const key = asSealed(await first.scope.generate(type));
       await first.vault.protect();
+      await second.vault.state(); // an application shows Unlock after reading the state (D-94)
       await second.vault.unlock();
 
       first.vault.lock();
@@ -693,6 +736,7 @@ describe.runIf(hasVirtualAuthenticator)('unlock and lock', () => {
     expect(get).toHaveBeenCalledTimes(1);
     expect(await first.vault.state()).toBe('unlocked');
     first.vault.lock();
+    await second.vault.state(); // an application shows Unlock after reading the state (D-94)
     await second.vault.unlock();
     second.vault.lock();
 
@@ -711,6 +755,7 @@ describe.runIf(hasVirtualAuthenticator)('unlock and lock', () => {
       await another.protect();
       const id = picked === 'a passkey key of the vault' ? passkeyKey.credentialId : await unlockPasskeyId(anotherName);
       const before = await readAll(first.name);
+      await second.vault.state(); // an application shows Unlock after reading the state (D-94)
 
       pickPasskey(id);
       await expectVaultError(second.vault.unlock(), 'not-found');
@@ -727,6 +772,7 @@ describe.runIf(hasVirtualAuthenticator)('unlock and lock', () => {
     async (expected) => {
       const [first, second] = await openContexts();
       await first.vault.protect();
+      await second.vault.state(); // an application shows Unlock after reading the state (D-94)
       const release = holdPrompt();
 
       const pending = second.vault.unlock();
@@ -741,6 +787,77 @@ describe.runIf(hasVirtualAuthenticator)('unlock and lock', () => {
     },
   );
 
+  test.each(['empty', 'unprotected'] as const)(
+    'unlock in an instance whose last read found the vault %s fails with not-found and no prompt; the next unlock prompts once and unlocks',
+    async (seen) => {
+      const [first, second] = await openContexts();
+      if (seen === 'unprotected') await first.scope.generate('ed25519');
+      expect(await second.vault.state()).toBe(seen);
+      await first.vault.protect();
+      const get = vi.spyOn(navigator.credentials, 'get');
+
+      await expectVaultError(second.vault.unlock(), 'not-found');
+      expect(get).not.toHaveBeenCalled();
+
+      await second.vault.unlock();
+      expect(get).toHaveBeenCalledTimes(1);
+      expect(await second.vault.state()).toBe('unlocked');
+    },
+  );
+
+  test('an instance whose last read was a sign that failed with locked unlocks with one prompt; after its own wipe, unlock is not-found with no prompt', async () => {
+    const [first, second] = await openContexts();
+    const key = asSealed(await first.scope.generate('ed25519')); // any sealed type: sign reads the header
+    await first.vault.protect();
+    await expectVaultError(second.scope.sign(key, message), 'locked');
+    const get = vi.spyOn(navigator.credentials, 'get');
+
+    await second.vault.unlock();
+    expect(get).toHaveBeenCalledTimes(1);
+
+    await second.vault.wipe();
+    await expectVaultError(second.vault.unlock(), 'not-found');
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  test('after another instance wipes and protects with a new unlock passkey, unlock with the old one fails with not-found and changes nothing; the next unlock asks for the new one and unlocks', async () => {
+    const [first, second] = await openContexts();
+    await first.vault.protect();
+    const old = await unlockPasskeyId(first.name);
+    expect(await second.vault.state()).toBe('locked');
+    await first.vault.wipe();
+    await first.vault.protect(); // the old unlock passkey stays at the authenticator (D-76)
+    const current = await unlockPasskeyId(first.name);
+    const before = await readAll(first.name);
+    const get = vi.spyOn(navigator.credentials, 'get');
+
+    await expectVaultError(second.vault.unlock(), 'not-found');
+    expect(get.mock.calls[0]?.[0]?.publicKey?.allowCredentials).toEqual([{ type: 'public-key', id: old }]);
+    expect(await readAll(first.name)).toEqual(before);
+
+    await second.vault.unlock();
+    expect(get.mock.calls[1]?.[0]?.publicKey?.allowCredentials).toEqual([{ type: 'public-key', id: current }]);
+    expect(await second.vault.state()).toBe('unlocked');
+  });
+
+  test.each(['wiped', 'wiped and protected again'] as const)(
+    'a declined prompt for an unlock passkey the vault no longer names, another instance having %s, fails with not-found, not cancelled',
+    async (change) => {
+      const [first, second] = await openContexts();
+      await first.vault.protect();
+      expect(await second.vault.state()).toBe('locked');
+      await first.vault.wipe();
+      if (change === 'wiped and protected again') await first.vault.protect();
+      const before = await readAll(first.name);
+      await authenticator.setPresence(false);
+      shortGetTimeout();
+
+      const error = await expectVaultError(second.vault.unlock(), 'not-found');
+      expect(error.cause).toMatchObject({ code: 'cancelled' });
+      expect(await readAll(first.name)).toEqual(before);
+    },
+  );
+
   test.each([
     ['a declined prompt', 'cancelled'],
     ['the unlock passkey deleted at its authenticator', 'cancelled'],
@@ -750,6 +867,7 @@ describe.runIf(hasVirtualAuthenticator)('unlock and lock', () => {
     const [first, second] = await openContexts();
     const key = asSealed(await first.scope.generate('ed25519'));
     await first.vault.protect();
+    await second.vault.state(); // an application shows Unlock after reading the state (D-94)
     const before = await readAll(first.name);
     if (failure === 'a declined prompt') {
       await authenticator.setPresence(false);

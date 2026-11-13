@@ -1,11 +1,12 @@
 import { Changes } from './changes.ts';
 import { closedError, Connection } from './connection.ts';
 import { protectVault } from './protect.ts';
-import { createUnlockPasskey, presentUnlockPasskey, protectionSupport } from './protection.ts';
+import { VaultError } from './errors.ts';
+import { createUnlockPasskey, protectionSupport } from './protection.ts';
 import { isScopeName, MAX_SCOPE_NAME_LENGTH } from './records.ts';
 import { Scope } from './scope.ts';
-import { clearAll, KEYS_STORE, META_STORE, readHeader } from './storage.ts';
-import { Unlock, unlockVault } from './unlock.ts';
+import { clearAll, KEYS_STORE, META_STORE } from './storage.ts';
+import { readHeaderInto, Unlock, unlockVault } from './unlock.ts';
 
 export interface OpenOptions {
   /** IndexedDB database name. Default: `vault`. */
@@ -33,11 +34,21 @@ export class Vault {
     this.#changes = changes;
   }
 
+  /**
+   * Opens the vault `name` and reads its header; never writes (D-11). A malformed vault still opens, so `wipe()` stays
+   * reachable; the call that needs the header fails.
+   */
   static async open(options: OpenOptions = {}): Promise<Vault> {
     const name = options.name ?? 'vault';
     const connection = new Connection(name);
     await connection.open();
-    return new Vault(connection, new Changes(name)); // the channel opens only for a vault that opened
+    const vault = new Vault(connection, new Changes(name)); // the channel opens only for a vault that opened
+    try {
+      await readHeaderInto(connection, vault.#unlock); // names the unlock credential for unlock()'s prompt (D-94)
+    } catch (error) {
+      if (!(error instanceof VaultError)) throw error; // unlock() reads it again and reports it
+    }
+    return vault;
   }
 
   /**
@@ -65,8 +76,7 @@ export class Vault {
    * creates an unprotected one: an application that expects protection checks this first. Never prompts.
    */
   async state(): Promise<VaultState> {
-    const header = await this.#connection.transact([META_STORE, KEYS_STORE], 'readonly', readHeader);
-    this.#unlock.dropIfStale(header);
+    const header = await readHeaderInto(this.#connection, this.#unlock);
     if (!header) return 'empty';
     if (header.protection.kind === 'none') return 'unprotected';
     return this.#unlock.isUnlocked(header) ? 'unlocked' : 'locked';
@@ -88,18 +98,20 @@ export class Vault {
   }
 
   /**
-   * Unlocks this context with the vault's unlock credential: one discoverable prompt, started before any await. Every
-   * sealed key of every scope taken from this instance then signs without a prompt, until `lock()` or `close()`.
-   * Nothing is stored or sent to another context; each context unlocks on its own (D-72). Another credential, or a vault
-   * that is empty or unprotected when the prompt is answered, is `not-found`; a declined prompt `cancelled`; an answer
-   * without user verification or without a PRF result `unsupported`; an edited protected header `corrupted`. A failed
-   * unlock changes nothing. Calls no `onChange` listener.
+   * Unlocks this context with the vault's unlock credential: one prompt for the unlock credential named by this
+   * instance's last read of the vault (`open()`, `state()`, `sign`, …), started before any await. Every sealed key of
+   * every scope taken from this instance then signs without a prompt, until `lock()` or `close()`. Nothing is stored or
+   * sent to another context; each context unlocks on its own (D-72). A vault that was empty or unprotected at that
+   * read is `not-found` with no prompt; another credential, a vault that is empty or unprotected when the prompt is
+   * answered, or a declined prompt for a credential the vault no longer names, is `not-found`: the next `unlock()`
+   * asks for the current one (D-94). A declined prompt is otherwise `cancelled`; an answer without user verification
+   * or without a PRF result `unsupported`; a malformed or edited protected header `corrupted`. A failed unlock changes
+   * nothing. Calls no `onChange` listener.
    */
   async unlock(): Promise<void> {
     if (this.#connection.closed) throw closedError(); // before the prompt: a closed vault prompts for nothing
-    const pending = presentUnlockPasskey(); // the prompt, before any await
-    const presented = await pending;
-    await unlockVault(this.#connection, this.#unlock, presented);
+    const pending = unlockVault(this.#connection, this.#unlock); // the prompt, before any await
+    await pending;
   }
 
   /** Locks this context: sealed keys fail `sign` with `locked` until `unlock()`. Other contexts are unaffected. */
@@ -111,6 +123,7 @@ export class Vault {
   /** Deletes every key of every scope and the vault itself, atomically. The vault is then empty, as if never used. */
   async wipe(): Promise<void> {
     await this.#connection.transact([META_STORE, KEYS_STORE], 'readwrite', async (tx) => clearAll(tx));
+    this.#unlock.see(undefined);
     this.#changes.notify();
   }
 

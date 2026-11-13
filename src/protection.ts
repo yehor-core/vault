@@ -72,13 +72,14 @@ export interface PresentedUnlock {
 }
 
 /**
- * D-73: a discoverable prompt, started before any await, with user verification required and the fixed PRF input.
- * Which passkey answered is checked by the caller, against the header it reads afterwards.
+ * D-94: a prompt for the unlock passkey `credentialId`, started before any await, with user verification required and
+ * the fixed PRF input: the request shape `protect()` checks (D-74). Which passkey answered is checked by the caller,
+ * against the header it reads afterwards (D-77).
  */
-export async function presentUnlockPasskey(): Promise<PresentedUnlock> {
-  const { credentialId, result } = await assertUnlock();
+export async function presentUnlockPasskey(credentialId: Bytes): Promise<PresentedUnlock> {
+  const { result, ...answered } = await assertUnlock(credentialId);
   const secret = result === undefined ? undefined : await importSecret(result);
-  return { credentialId, secret };
+  return { credentialId: answered.credentialId, secret };
 }
 
 /**
@@ -107,13 +108,13 @@ export async function createUnlockPasskey(): Promise<UnlockSecret> {
 }
 
 /**
- * A prompt for an unlock passkey, started before any await: discoverable, or restricted to `credentialId`. User
- * verification is required and checked: without it, an `hmac-secret` authenticator returns another PRF result.
+ * A prompt for the unlock passkey `credentialId`, started before any await. User verification is required and
+ * checked: without it, an `hmac-secret` authenticator returns another PRF result.
  */
-async function assertUnlock(credentialId?: Bytes): Promise<{ credentialId: Bytes; result: BufferSource | undefined }> {
+async function assertUnlock(credentialId: Bytes): Promise<{ credentialId: Bytes; result: BufferSource | undefined }> {
   const publicKey: PublicKeyCredentialRequestOptions = {
     challenge: crypto.getRandomValues(new Uint8Array(UNLOCK_CHALLENGE_LENGTH)),
-    ...(credentialId && { allowCredentials: [{ type: 'public-key', id: credentialId }] }),
+    allowCredentials: [{ type: 'public-key', id: credentialId }],
     userVerification: 'required',
     extensions: { prf: { eval: { first: PRF_INPUT } } },
   };
