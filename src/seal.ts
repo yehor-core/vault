@@ -3,7 +3,7 @@ import { encode, type Bytes } from './bytes.ts';
 // Storage format v1: the IV length and the HKDF domain separator decide whether a stored key opens.
 export const IV_LENGTH = 12;
 const SEAL_DOMAIN = 'vault/v1/seal';
-const P256: EcKeyImportParams = { name: 'ECDH', namedCurve: 'P-256' };
+export const P256: EcKeyImportParams = { name: 'ECDH', namedCurve: 'P-256' };
 
 /** An AES-256-GCM key and parameters that seal exactly one private key. */
 export interface Cipher {
@@ -18,9 +18,12 @@ export interface Sealed {
   readonly ciphertext: Bytes;
 }
 
-/** A fresh wrapping key pair: SPKI public half, non-extractable private half that can only derive keys. */
-export async function generateWrappingKey(): Promise<{ publicKey: Bytes; privateKey: CryptoKey }> {
-  const pair = await crypto.subtle.generateKey(P256, false, ['deriveKey']);
+/**
+ * A fresh wrapping key pair: SPKI public half, private half that can only derive keys. Extractable only for
+ * `protect()`, which wraps it (D-81).
+ */
+export async function generateWrappingKey(extractable = false): Promise<{ publicKey: Bytes; privateKey: CryptoKey }> {
+  const pair = await crypto.subtle.generateKey(P256, extractable, ['deriveKey']);
   const publicKey = await crypto.subtle.exportKey('spki', pair.publicKey);
   return { publicKey: new Uint8Array(publicKey), privateKey: pair.privateKey };
 }

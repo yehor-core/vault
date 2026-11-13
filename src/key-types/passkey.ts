@@ -57,7 +57,7 @@ export const passkey: PasskeyKeyType = {
   info: ({ credentialId }) => ({ credentialId }),
 
   async generate(request) {
-    const pending = navigator.credentials.create({ publicKey: creationOptions(request) }); // the prompt, before any await
+    const pending = navigator.credentials.create({ publicKey: keyCreationOptions(request) }); // the prompt, before any await
     const { credentialId, publicKey } = readCreated(await prompt(pending));
     return { publicKey, identity: credentialId, part: async () => ({ credentialId }), erase: () => {} };
   },
@@ -85,6 +85,8 @@ export const passkey: PasskeyKeyType = {
     const { authenticatorData, clientDataJSON, signature } = assertion;
     return { authenticatorData, clientDataJSON, signature };
   },
+
+  reseal: async () => undefined, // the private key is in its authenticator, sealed to nothing (D-61)
 
   // D-55, D-56: a discoverable prompt names the credential, a second one for it gives the public key.
   async add(scope) {
@@ -135,11 +137,15 @@ function randomChallenge(): Bytes {
   return crypto.getRandomValues(new Uint8Array(ADD_CHALLENGE_LENGTH));
 }
 
-function creationOptions({ scope, label }: NewKeyRequest): PublicKeyCredentialCreationOptions {
-  const name = label ?? DEFAULT_USER_NAME; // D-52: the picker shows it; the label leaves Vault
+function keyCreationOptions({ scope, label }: NewKeyRequest): PublicKeyCredentialCreationOptions {
+  return creationOptions(userId(scope), label ?? DEFAULT_USER_NAME); // D-52: the picker shows it; the label leaves Vault
+}
+
+/** The options of every passkey Vault creates (D-50, D-78): ES256 only, discoverable, user verification required. */
+export function creationOptions(userId: Bytes, name: string): PublicKeyCredentialCreationOptions {
   return {
     rp: { id: location.hostname, name: RP_NAME },
-    user: { id: userId(scope), name, displayName: name },
+    user: { id: userId, name, displayName: name },
     challenge: crypto.getRandomValues(new Uint8Array(CREATE_CHALLENGE_LENGTH)),
     pubKeyCredParams: [{ type: 'public-key', alg: ES256 }],
     // requireResidentKey: what Level 1 browsers read instead of residentKey; the spec asks for both.
@@ -161,7 +167,7 @@ function scopeMark(scope: string): Uint8Array {
 }
 
 /** A WebAuthn call's result; any failure is a VaultError: a declined prompt `cancelled`, no user verification `unsupported` (D-59). */
-async function prompt(pending: Promise<Credential | null>): Promise<Credential | null> {
+export async function prompt(pending: Promise<Credential | null>): Promise<Credential | null> {
   try {
     return await pending; // await: so catch sees it
   } catch (cause) {
@@ -174,7 +180,7 @@ async function prompt(pending: Promise<Credential | null>): Promise<Credential |
   }
 }
 
-function readCreated(credential: Credential | null): { credentialId: Bytes; publicKey: Bytes } {
+export function readCreated(credential: Credential | null): { credentialId: Bytes; publicKey: Bytes } {
   if (
     !(credential instanceof PublicKeyCredential) ||
     !(credential.response instanceof AuthenticatorAttestationResponse)

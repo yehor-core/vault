@@ -1,5 +1,7 @@
 import { Changes } from './changes.ts';
 import { closedError, Connection } from './connection.ts';
+import { protectVault } from './protect.ts';
+import { createUnlockPasskey } from './protection.ts';
 import { isScopeName, MAX_SCOPE_NAME_LENGTH } from './records.ts';
 import { Scope } from './scope.ts';
 import { clearAll, KEYS_STORE, META_STORE, readHeader } from './storage.ts';
@@ -52,7 +54,24 @@ export class Vault {
    */
   async state(): Promise<VaultState> {
     const header = await this.#connection.transact([META_STORE, KEYS_STORE], 'readonly', readHeader);
-    return header ? 'unprotected' : 'empty';
+    if (!header) return 'empty';
+    if (header.protection.kind === 'none') return 'unprotected';
+    return this.#unlock.isUnlocked(header) ? 'unlocked' : 'locked';
+  }
+
+  /**
+   * Turns protection on, keeping every key: creates the vault's unlock credential, with a prompt started before any
+   * await, and stores the vault sealed under it, atomically. Works on an empty vault too (D-67). This context is then
+   * unlocked; every other context, and this one after a reload, is locked. A protected vault is `protected`; an
+   * authenticator without PRF is `unsupported`; a declined prompt is `cancelled`. Whatever fails, the vault is
+   * unchanged, and an unlock credential already created stays at its provider (D-76).
+   */
+  async protect(): Promise<void> {
+    if (this.#connection.closed) throw closedError(); // before the prompt: a closed vault creates nothing
+    const pending = createUnlockPasskey(); // the prompt, before any await
+    const secret = await pending;
+    await protectVault(this.#connection, this.#unlock, secret);
+    this.#changes.notify();
   }
 
   /** Deletes every key of every scope and the vault itself, atomically. The vault is then empty, as if never used. */
@@ -62,7 +81,7 @@ export class Vault {
   }
 
   /**
-   * Calls `listener`, with no argument, after every successful `generate`, `delete` and `wipe` in any context
+   * Calls `listener`, with no argument, after every successful `generate`, `delete`, `protect` and `wipe` in any context
    * that has this vault open, this one included, also when the call changed nothing. Read the vault again
    * there. Best effort: a notification can be lost or forged. Returns a function that stops the listener.
    */

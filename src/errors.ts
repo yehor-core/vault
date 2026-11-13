@@ -17,10 +17,21 @@ export type VaultErrorCode =
    */
   | 'cancelled'
   /**
-   * The authenticator can't verify the user (PIN or biometric), or answered without verifying them (D-59). Not
-   * retryable: ask the user for an authenticator that verifies them.
+   * The authenticator can't verify the user (PIN or biometric), or answered without verifying them (D-59); or, for
+   * `protect()`, it returns no PRF result (D-74). Not retryable: ask the user for an authenticator that verifies them,
+   * or, for `protect()`, one that supports PRF.
    */
-  | 'unsupported';
+  | 'unsupported'
+  /**
+   * The vault is protected and this context is locked: signing with a key whose private key the vault stores needs
+   * `unlock()` first (D-66). Not retryable as it is: unlock, then sign again.
+   */
+  | 'locked'
+  /**
+   * `protect()` found the vault protected already, perhaps by another context while its prompt was open; nothing
+   * changed (D-68). The credential the call created to unlock the vault stays at its provider; the user may remove it.
+   */
+  | 'protected';
 
 /** Every failure Vault reports. Branch on `code`; retry only when `retryable`. */
 export class VaultError extends Error {

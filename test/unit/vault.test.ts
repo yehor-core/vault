@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, expectTypeOf, test, vi } from 'vitest';
 import { keyTypes, type AddableKeyTypeName } from '../../src/key-types.ts';
-import { Vault, type KeyInfo, type Scope, type Signature, type VaultState } from '../../src/index.ts';
+import {
+  Vault,
+  type KeyInfo,
+  type Scope,
+  type Signature,
+  type VaultErrorCode,
+  type VaultState,
+} from '../../src/index.ts';
 import {
   asSealed,
   cleanup,
@@ -568,10 +575,17 @@ type SealedKeyInfo<T> = {
 type SealedSignature<T> = { readonly type: T; readonly bytes: Uint8Array<ArrayBuffer> };
 const signPasskey = (scope: Scope, key: KeyInfo<'passkey'>) => scope.sign(key, message);
 
-// D-65: one union, so an unprotected vault that is unlocked can't be expressed. locked and unlocked arrive with protect().
+// D-65: one union, so an unprotected vault that is unlocked can't be expressed.
 test('state() returns exactly empty, unprotected, locked or unlocked', () => {
   expectTypeOf<ReturnType<Vault['state']>>().toEqualTypeOf<Promise<'empty' | 'unprotected' | 'locked' | 'unlocked'>>();
   expectTypeOf<VaultState>().toEqualTypeOf<'empty' | 'unprotected' | 'locked' | 'unlocked'>();
+});
+
+// D-66, D-68: a caller branches on these two codes, so they are part of the public type.
+test('VaultErrorCode includes locked and protected', () => {
+  expectTypeOf<'locked'>().toExtend<VaultErrorCode>();
+  expectTypeOf<'protected'>().toExtend<VaultErrorCode>();
+  expectTypeOf<Vault['protect']>().toEqualTypeOf<() => Promise<void>>();
 });
 
 // Adding an existing key exists only for key types that can (D-55).

@@ -49,6 +49,12 @@ interface KeyTypeBase<Part extends object, Sig extends object> {
    * reads the stored key, or fails as the core decides (`not-found`, a type mismatch).
    */
   sign(key: Fields, data: Bytes, load: () => Promise<StoredKey<Part>>): Promise<Sig>;
+  /**
+   * This type's part of `stored`'s record, sealed to `wrappingPublicKey` instead of its header's key, for
+   * `protect()`; undefined when the part doesn't depend on the header (D-61), so the record stays as it is. A
+   * stored key that fails to open is `corrupted`.
+   */
+  reseal(stored: StoredKey<Part>, wrappingPublicKey: Bytes): Promise<Part | undefined>;
 }
 
 /** What `generate` was asked for. */

@@ -1,0 +1,354 @@
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { addVirtualAuthenticator, hasVirtualAuthenticator, type VirtualAuthenticator } from './authenticator.ts';
+import {
+  asSealed,
+  cleanup,
+  expectVaultError,
+  keyTypeCases,
+  openVault,
+  readAll,
+  readHeader,
+  readKey,
+  openContexts,
+  TEST_SCOPE,
+  tickingClock,
+} from './helpers.ts';
+
+const utf8 = new TextEncoder();
+const sha256 = async (bytes: Uint8Array<ArrayBuffer>) => new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+
+const message = utf8.encode('message to sign');
+
+/** Vault's length-prefixed encoding, written out by hand (format v1: tag, 4-byte big-endian length, data). */
+function lengthPrefixed(...parts: (string | number | Uint8Array)[]): Uint8Array<ArrayBuffer> {
+  const fields = parts.map((part) => {
+    const [tag, data] =
+      typeof part === 'string'
+        ? [1, utf8.encode(part)]
+        : typeof part === 'number'
+          ? [3, new Uint8Array(new BigUint64Array([BigInt(part)]).buffer).reverse()]
+          : [2, part];
+    const field = new Uint8Array(5 + data.length);
+    field[0] = tag;
+    new DataView(field.buffer).setUint32(1, data.length);
+    field.set(data, 5);
+    return field;
+  });
+  const out = new Uint8Array(fields.reduce((n, f) => n + f.length, 0));
+  fields.reduce((offset, f) => (out.set(f, offset), offset + f.length), 0);
+  return out;
+}
+
+/** D-73, D-78: the fixed PRF input of every unlock passkey prompt. */
+const UNLOCK_PRF_INPUT = lengthPrefixed('vault/v1/unlock');
+
+/**
+ * Records the PRF results the browser hands Vault: `copies` as they were returned, `returned` the buffers Vault
+ * received. An observer: the results themselves are the authenticator's.
+ */
+function recordPrfResults(): { copies: Uint8Array[]; returned: ArrayBuffer[] } {
+  const original = PublicKeyCredential.prototype.getClientExtensionResults;
+  const copies: Uint8Array[] = [];
+  const returned: ArrayBuffer[] = [];
+  vi.spyOn(PublicKeyCredential.prototype, 'getClientExtensionResults').mockImplementation(function (
+    this: PublicKeyCredential,
+  ) {
+    const outputs = original.call(this);
+    const first = outputs.prf?.results?.first;
+    if (first instanceof ArrayBuffer) {
+      copies.push(new Uint8Array(first.slice(0)));
+      returned.push(first);
+    }
+    return outputs;
+  });
+  return { copies, returned };
+}
+
+/** The wrapping private key of a protected header, unwrapped with code that is not Vault's (D-81). */
+async function unwrapByHand(header: any, prfResult: Uint8Array<ArrayBuffer>): Promise<CryptoKey> {
+  const { v, wrappingPublicKey, protection } = header;
+  const base = await crypto.subtle.importKey('raw', prfResult, 'HKDF', false, ['deriveKey']);
+  const kek = await crypto.subtle.deriveKey(
+    { name: 'HKDF', hash: 'SHA-256', salt: protection.salt, info: UNLOCK_PRF_INPUT },
+    base,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['unwrapKey'],
+  );
+  const additionalData = lengthPrefixed(
+    'vault/v1/header',
+    v,
+    wrappingPublicKey,
+    'passkey',
+    protection.credentialId,
+    protection.salt,
+  );
+  return crypto.subtle.unwrapKey(
+    'pkcs8',
+    protection.wrappedPrivateKey,
+    kek,
+    { name: 'AES-GCM', iv: protection.iv, additionalData },
+    { name: 'ECDH', namedCurve: 'P-256' },
+    true,
+    ['deriveKey'],
+  );
+}
+
+/** The public point of a P-256 key, as JWK x and y. */
+async function point(key: CryptoKey): Promise<{ x: string | undefined; y: string | undefined }> {
+  const { x, y } = await crypto.subtle.exportKey('jwk', key);
+  return { x, y };
+}
+
+let authenticator: VirtualAuthenticator;
+
+// Chromium only: the CDP virtual authenticator with PRF exists nowhere else (D-80).
+describe.runIf(hasVirtualAuthenticator)('protect, with the PRF result at creation', () => {
+  beforeEach(async () => {
+    authenticator = await addVirtualAuthenticator({ hasPrf: true });
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await authenticator.remove();
+    await cleanup();
+  });
+
+  test('protect starts the unlock passkey prompt before its first await, with the options Vault fixes', async () => {
+    const { vault } = await openVault();
+    const create = vi.spyOn(navigator.credentials, 'create');
+
+    const pending = vault.protect();
+    expect(create).toHaveBeenCalledTimes(1);
+    await pending;
+
+    const options = create.mock.calls[0]?.[0]?.publicKey;
+    expect(options).toMatchObject({
+      rp: { id: location.hostname },
+      user: { name: 'Vault unlock', displayName: 'Vault unlock' },
+      pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
+      authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
+      attestation: 'none',
+      extensions: { prf: { eval: { first: UNLOCK_PRF_INPUT } } },
+    });
+    expect(options?.pubKeyCredParams).toHaveLength(1);
+    const userId = new Uint8Array(options?.user.id as ArrayBuffer);
+    expect(userId).toHaveLength(32);
+    expect(userId.slice(0, 16)).toEqual((await sha256(UNLOCK_PRF_INPUT)).slice(0, 16));
+    expect(create).toHaveBeenCalledTimes(1); // one prompt: the result came at creation
+    expect(await authenticator.credentials()).toHaveLength(1);
+  });
+
+  test('the protected header wraps the wrapping private key under a KEK from the PRF result, bound to every other field', async () => {
+    const { vault, name } = await openVault();
+    const prf = recordPrfResults();
+
+    await vault.protect();
+
+    const header = await readHeader(name);
+    const [credential] = await authenticator.credentials();
+    expect(Object.keys(header).sort()).toEqual(['protection', 'v', 'wrappingPublicKey']);
+    expect(Object.keys(header.protection).sort()).toEqual(['credentialId', 'iv', 'kind', 'salt', 'wrappedPrivateKey']);
+    expect(header.protection).toMatchObject({ kind: 'passkey', credentialId: credential?.credentialId });
+    expect(header.protection.salt).toHaveLength(32);
+    expect(header.protection.iv).toHaveLength(12);
+
+    const [prfResult] = prf.copies;
+    if (!prfResult) throw new Error('no PRF result was returned');
+    const privateKey = await unwrapByHand(header, new Uint8Array(prfResult));
+    const publicKey = await crypto.subtle.importKey(
+      'spki',
+      header.wrappingPublicKey,
+      { name: 'ECDH', namedCurve: 'P-256' },
+      true,
+      [],
+    );
+    expect(await point(privateKey)).toEqual(await point(publicKey));
+
+    // Each other field is in the AAD: the hand-made unwrap fails when one changes.
+    for (const edited of [
+      { ...header, v: 2 },
+      { ...header, protection: { ...header.protection, salt: new Uint8Array(32) } },
+      { ...header, protection: { ...header.protection, credentialId: new Uint8Array(16) } },
+    ]) {
+      await expect(unwrapByHand(edited, new Uint8Array(prfResult))).rejects.toThrow();
+    }
+  });
+
+  test('the PRF result’s bytes are zeroed once imported', async () => {
+    const { vault } = await openVault();
+    const prf = recordPrfResults();
+
+    await vault.protect();
+
+    expect(prf.copies[0]?.some((byte) => byte !== 0)).toBe(true);
+    expect(new Uint8Array(prf.returned[0] ?? new ArrayBuffer(1))).toEqual(new Uint8Array(32));
+  });
+
+  describe.each(keyTypeCases)('$type', ({ type, verify }) => {
+    test('after protect every key signs and verifies as before, under a new wrapping public key; passkey records are unchanged', async () => {
+      tickingClock();
+      const { vault, scope, name } = await openVault();
+      const other = vault.scope('other');
+      const keys = [await scope.generate(type), await other.generate(type, { label: 'Payments' })];
+      const passkeyKey = await scope.generate('passkey');
+      const before = await readHeader(name);
+      const passkeyRecord = await readKey(name, TEST_SCOPE, passkeyKey.id);
+
+      await vault.protect();
+
+      expect((await readHeader(name)).wrappingPublicKey).not.toEqual(before.wrappingPublicKey);
+      expect(await readKey(name, TEST_SCOPE, passkeyKey.id)).toEqual(passkeyRecord);
+      for (const [key, owner] of [
+        [keys[0], scope],
+        [keys[1], other],
+      ] as const) {
+        if (!key) throw new Error('missing key');
+        const { bytes } = await owner.sign(asSealed(key), message);
+        expect(await verify(key.publicKey, bytes, message)).toBe(true);
+      }
+      expect((await scope.list()).map((k) => k.id)).toEqual([keys[0]?.id, passkeyKey.id]);
+      expect(await other.list()).toEqual([keys[1]]);
+      await expect(scope.sign(passkeyKey, message)).resolves.toMatchObject({ type: 'passkey' });
+    });
+  });
+
+  test('protect on an empty vault writes a protected header and no keys', async () => {
+    const { vault, name } = await openVault();
+
+    await vault.protect();
+
+    const { meta, keys } = await readAll(name);
+    expect(meta).toEqual([expect.objectContaining({ protection: expect.objectContaining({ kind: 'passkey' }) })]);
+    expect(keys).toEqual([]);
+  });
+
+  test('protect on a protected vault fails with protected, not retryable, and changes nothing, unlocked or locked', async () => {
+    const [first, second] = await openContexts();
+    await first.scope.generate('ed25519');
+    await first.vault.protect();
+    const before = await readAll(first.name);
+
+    await expectVaultError(first.vault.protect(), 'protected');
+    await expectVaultError(second.vault.protect(), 'protected');
+
+    expect(await readAll(first.name)).toEqual(before);
+  });
+});
+
+/** Gives the next `create` prompt a short timeout: with presence off, it then ends as a declined prompt does. */
+function shortCreateTimeout() {
+  const original = navigator.credentials.create.bind(navigator.credentials);
+  vi.spyOn(navigator.credentials, 'create').mockImplementationOnce(async (options?: CredentialCreationOptions) =>
+    original({ ...options, publicKey: { ...options?.publicKey, timeout: 100 } } as never),
+  );
+}
+
+describe.runIf(hasVirtualAuthenticator)('protect, failing', () => {
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await authenticator.remove();
+    await cleanup();
+  });
+
+  test('an authenticator without PRF makes protect fail with unsupported, and the vault is unchanged', async () => {
+    authenticator = await addVirtualAuthenticator();
+    const [first, second] = await openContexts();
+    await first.scope.generate('ed25519');
+    const before = await readAll(first.name);
+    const notified = [vi.fn(), vi.fn()];
+    first.vault.onChange(notified[0] ?? vi.fn());
+    second.vault.onChange(notified[1] ?? vi.fn());
+
+    await expectVaultError(first.vault.protect(), 'unsupported');
+
+    expect(await readAll(first.name)).toEqual(before);
+    expect(await first.vault.state()).toBe('unprotected');
+    await new Promise((resolve) => setTimeout(resolve, 50)); // a notification would have crossed by now
+    expect(notified.map((listener) => listener.mock.calls.length)).toEqual([0, 0]);
+  });
+
+  test('a declined prompt makes protect fail with cancelled, and the vault is unchanged', async () => {
+    authenticator = await addVirtualAuthenticator({ hasPrf: true });
+    const { vault, scope, name } = await openVault();
+    await scope.generate('secp256k1');
+    const before = await readAll(name);
+    await authenticator.setPresence(false);
+    shortCreateTimeout();
+
+    await expectVaultError(vault.protect(), 'cancelled');
+
+    expect(await readAll(name)).toEqual(before);
+  });
+});
+
+describe.runIf(hasVirtualAuthenticator)('after protect', () => {
+  beforeEach(async () => {
+    authenticator = await addVirtualAuthenticator({ hasPrf: true });
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await authenticator.remove();
+    await cleanup();
+  });
+
+  test('onChange listeners are called after a protect that committed, in this and another instance; not after one that failed', async () => {
+    const [first, second] = await openContexts();
+    const calls = [vi.fn(), vi.fn()] as const;
+    first.vault.onChange(calls[0]);
+    const crossed = new Promise<void>((resolve) => second.vault.onChange(() => (calls[1](), resolve())));
+
+    await first.vault.protect();
+    expect(calls[0]).toHaveBeenCalledTimes(1);
+    await crossed;
+
+    await expectVaultError(first.vault.protect(), 'protected');
+    await new Promise((resolve) => setTimeout(resolve, 50)); // a notification would have crossed by now
+    expect([calls[0].mock.calls.length, calls[1].mock.calls.length]).toEqual([1, 1]);
+  });
+
+  describe.each(keyTypeCases)('$type', ({ type, verify }) => {
+    test('the protecting instance is unlocked and signs with sealed keys without a prompt', async () => {
+      const { vault, scope } = await openVault();
+      const key = asSealed(await scope.generate(type));
+      await vault.protect();
+      const get = vi.spyOn(navigator.credentials, 'get');
+
+      expect(await vault.state()).toBe('unlocked');
+      const { bytes } = await scope.sign(key, message);
+
+      expect(await verify(key.publicKey, bytes, message)).toBe(true);
+      expect(get).not.toHaveBeenCalled();
+    });
+
+    test('another instance is locked: sealed sign fails with locked; generate, list, add, passkey sign and wipe work', async () => {
+      tickingClock();
+      const [first, second] = await openContexts();
+      const sealed = asSealed(await first.scope.generate(type));
+      const passkeyKey = await first.scope.generate('passkey');
+      await first.vault.protect();
+      const [unlockPasskey] = (await authenticator.credentials()).filter(
+        (c) => !c.credentialId.every((byte, i) => byte === passkeyKey.credentialId[i]),
+      );
+      if (!unlockPasskey) throw new Error('no unlock passkey');
+      await authenticator.removeCredential(unlockPasskey.credentialId); // so add's picker offers only the passkey key
+      const create = vi.spyOn(navigator.credentials, 'create');
+
+      expect(await second.vault.state()).toBe('locked');
+      await expectVaultError(second.scope.sign(sealed, message), 'locked');
+      const generated = asSealed(await second.scope.generate(type));
+      expect(create).not.toHaveBeenCalled();
+      expect((await second.scope.list()).map((k) => k.id)).toEqual([sealed.id, passkeyKey.id, generated.id]);
+      await expect(second.scope.add('passkey')).resolves.toEqual(passkeyKey);
+      await expect(second.scope.sign(passkeyKey, message)).resolves.toMatchObject({ type: 'passkey' });
+
+      // Sealed to the protected wrapping public key: the unlocked instance opens it.
+      const { bytes } = await first.scope.sign(generated, message);
+      expect(await verify(generated.publicKey, bytes, message)).toBe(true);
+
+      await second.vault.wipe();
+      expect(await second.vault.state()).toBe('empty');
+    });
+  });
+});

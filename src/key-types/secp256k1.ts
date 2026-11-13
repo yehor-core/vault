@@ -51,6 +51,16 @@ export const secp256k1 = sealedKeyType({
   async verify(publicKey, signature, data) {
     return curve.verify(signature, data, publicKey, VERIFY_OPTIONS);
   },
+
+  async reseal(sealed, from, to) {
+    const plaintext = await crypto.subtle.decrypt(from.params, from.key, sealed);
+    const secretKey = new Uint8Array(plaintext); // a view: zeroing it zeroes the decrypted buffer
+    try {
+      return await crypto.subtle.encrypt(to.params, to.key, secretKey); // await: so finally runs after it; sign checks the scalar
+    } finally {
+      secretKey.fill(0);
+    }
+  },
 });
 
 function randomScalar() {

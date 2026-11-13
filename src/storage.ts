@@ -38,8 +38,30 @@ export function listKeyRecords(tx: IDBTransaction, scope: string): Promise<unkno
   return request(tx.objectStore(KEYS_STORE).getAll(scopeRange(scope)));
 }
 
+/** The keys and the records of every scope, in key order. */
+export async function listAllKeyRecords(tx: IDBTransaction): Promise<{ keys: IDBValidKey[]; values: unknown[] }> {
+  const store = tx.objectStore(KEYS_STORE);
+  const [keys, values] = await Promise.all([request(store.getAllKeys()), request(store.getAll())]);
+  return { keys, values };
+}
+
+/** The keys of every key record, in key order. */
+export function listAllKeys(tx: IDBTransaction): Promise<IDBValidKey[]> {
+  return request(tx.objectStore(KEYS_STORE).getAllKeys());
+}
+
 export function addHeader(tx: IDBTransaction, header: HeaderRecord): void {
   tx.objectStore(META_STORE).add(header, HEADER_KEY);
+}
+
+/** Writes `header` over the stored one, or as the first. */
+export function putHeader(tx: IDBTransaction, header: HeaderRecord): void {
+  tx.objectStore(META_STORE).put(header, HEADER_KEY);
+}
+
+/** Writes `record` over the stored one of its scope and id. */
+export function putKeyRecord(tx: IDBTransaction, record: KeyRecord): void {
+  tx.objectStore(KEYS_STORE).put(record);
 }
 
 export function addKeyRecord(tx: IDBTransaction, record: KeyRecord): void {

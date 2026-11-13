@@ -22,11 +22,20 @@ export interface VirtualAuthenticator {
   remove(): Promise<void>;
 }
 
+/** PRF support of a virtual authenticator (docs/research/webauthn-prf.md §6); none by default. */
+export interface PrfOptions {
+  /** CTAP `prf`: PRF results at creation and at assertion. */
+  readonly hasPrf?: boolean;
+  /** CTAP `hmac-secret`: PRF results at assertion only, unless `hasHmacSecretMc` is set too. */
+  readonly hasHmacSecret?: boolean;
+  readonly hasHmacSecretMc?: boolean;
+}
+
 /**
  * A CTAP2 platform authenticator with resident keys and user verification, which answers every prompt at once
  * with the user verified. Chromium only (`hasVirtualAuthenticator`). Remove it in afterEach.
  */
-export async function addVirtualAuthenticator(): Promise<VirtualAuthenticator> {
+export async function addVirtualAuthenticator(prf: PrfOptions = {}): Promise<VirtualAuthenticator> {
   const session = cdp();
   await session.send('WebAuthn.enable', { enableUI: false });
   const { authenticatorId } = await session.send('WebAuthn.addVirtualAuthenticator', {
@@ -37,6 +46,7 @@ export async function addVirtualAuthenticator(): Promise<VirtualAuthenticator> {
       hasUserVerification: true,
       isUserVerified: true,
       automaticPresenceSimulation: true,
+      ...prf,
     },
   });
   return {

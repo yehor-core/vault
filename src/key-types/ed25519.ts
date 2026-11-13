@@ -32,6 +32,12 @@ export const ed25519 = sealedKeyType({
     return new Uint8Array(await crypto.subtle.sign('Ed25519', privateKey, data));
   },
 
+  // Extractable only inside WebCrypto, so wrapKey can seal it again; its bytes never reach JS.
+  async reseal(sealed, from, to) {
+    const privateKey = await crypto.subtle.unwrapKey('pkcs8', sealed, from.key, from.params, 'Ed25519', true, ['sign']);
+    return crypto.subtle.wrapKey('pkcs8', privateKey, to.key, to.params);
+  },
+
   // On the curve library, never crypto.subtle.verify: WebKit's crashes the tab on some public keys.
   async verify(publicKey, signature, data) {
     return curve.verify(signature, data, publicKey, VERIFY_OPTIONS);
