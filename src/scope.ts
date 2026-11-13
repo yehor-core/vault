@@ -25,6 +25,7 @@ import {
   type KeyFields,
   type KeyRecord,
 } from './records.ts';
+import { MAX_ATTEMPTS, untilUnchanged } from './retry.ts';
 import { generateWrappingKey } from './seal.ts';
 import type { Unlock } from './unlock.ts';
 import {
@@ -38,7 +39,6 @@ import {
   readHeader,
 } from './storage.ts';
 
-const MAX_ATTEMPTS = 3;
 const ADD_FAILED = 'The browser failed to add the presented key';
 
 /** Public information about a key; readable without unlocking. One member per key type. */
@@ -327,15 +327,6 @@ function readLabelOption(options: unknown): string | undefined {
   if (label !== undefined && !isLabel(label))
     throw new TypeError(`A label is a well-formed string of 1 to ${MAX_LABEL_LENGTH} UTF-16 code units`);
   return label;
-}
-
-/** Optimistic write: runs `attempt` up to `times` times until it returns a value (undefined = vault changed). */
-async function untilUnchanged<T>(times: number, attempt: () => Promise<T | undefined>): Promise<T | undefined> {
-  for (let i = 0; i < times; i++) {
-    const result = await attempt();
-    if (result !== undefined) return result;
-  }
-  return undefined;
 }
 
 async function createHeader(): Promise<HeaderRecord> {

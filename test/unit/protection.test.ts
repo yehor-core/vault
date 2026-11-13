@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { Vault, type Scope } from '../../src/index.ts';
+import { Vault, type KeyInfo, type Scope } from '../../src/index.ts';
 import {
   addVirtualAuthenticator,
   hasVirtualAuthenticator,
@@ -10,6 +10,7 @@ import {
   asSealed,
   cleanup,
   expectVaultError,
+  holdGenerate,
   keyTypeCases,
   openVault,
   readAll,
@@ -20,6 +21,7 @@ import {
   TEST_SCOPE,
   writeHeader,
   tickingClock,
+  type SealedKeyTypeName,
 } from './helpers.ts';
 
 const utf8 = new TextEncoder();
@@ -772,3 +774,188 @@ function clearStores(tx: IDBTransaction): void {
   tx.objectStore('meta').clear();
   tx.objectStore('keys').clear();
 }
+
+/**
+ * Runs `write` each time protect, its prompts answered and the vault read, is about to wrap the new wrapping private
+ * key: after its read, before its write transaction, so another instance's write falls in between. The only ECDH
+ * key Vault wraps is that one; sealed keys are Ed25519 keys or bytes. Restored by vi.restoreAllMocks.
+ */
+function beforeProtectWrite(write: (attempt: number) => unknown): void {
+  const wrapKey = crypto.subtle.wrapKey.bind(crypto.subtle);
+  let attempt = 0;
+  vi.spyOn(crypto.subtle, 'wrapKey').mockImplementation(async (format, key, wrappingKey, algorithm) => {
+    if (key.algorithm.name === 'ECDH') await write(++attempt);
+    return wrapKey(format, key, wrappingKey, algorithm);
+  });
+}
+
+// Chromium only, as above (D-80). Two instances of one database are two contexts (concurrency.test.ts).
+describe.runIf(hasVirtualAuthenticator)('protection across instances', () => {
+  beforeEach(async () => {
+    authenticator = await addVirtualAuthenticator({ hasPrf: true });
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await authenticator.remove();
+    await cleanup();
+  });
+
+  describe.each(keyTypeCases)('$type', ({ type, verify }) => {
+    /** Every key signs in `scope`'s instance, unlocked, with a signature that verifies. */
+    async function expectSigns(scope: Scope, keys: KeyInfo<SealedKeyTypeName>[]): Promise<void> {
+      for (const key of keys) {
+        const { bytes } = await scope.sign(key, message);
+        expect(await verify(key.publicKey, bytes, message)).toBe(true);
+      }
+    }
+
+    test('protect held after its prompt while another instance generates: it commits with no new prompt, and the new key is protected', async () => {
+      tickingClock();
+      const [first, second] = await openContexts();
+      const existing = asSealed(await first.scope.generate(type));
+      let generated: KeyInfo<SealedKeyTypeName> | undefined;
+      beforeProtectWrite(async (attempt) => {
+        if (attempt === 1) generated = asSealed(await second.scope.generate(type));
+      });
+      const create = vi.spyOn(navigator.credentials, 'create');
+      const get = vi.spyOn(navigator.credentials, 'get');
+
+      await first.vault.protect();
+
+      expect([create.mock.calls.length, get.mock.calls.length]).toEqual([1, 0]);
+      if (!generated) throw new Error('no key generated');
+      expect((await first.scope.list()).map((k) => k.id)).toEqual([existing.id, generated.id]);
+      expect(await first.vault.state()).toBe('unlocked');
+      await expectSigns(first.scope, [existing, generated]);
+      expect(await second.vault.state()).toBe('locked');
+      await expectVaultError(second.scope.sign(generated, message), 'locked');
+      pickPasskey(await unlockPasskeyId(first.name));
+      await second.vault.unlock();
+      await expectSigns(second.scope, [existing, generated]);
+    });
+
+    test('protect held after its prompt while another instance deletes a key: it commits with no new prompt, and the key stays deleted', async () => {
+      tickingClock();
+      const [first, second] = await openContexts();
+      const kept = asSealed(await first.scope.generate(type));
+      const deleted = asSealed(await first.scope.generate(type));
+      beforeProtectWrite(async (attempt) => {
+        if (attempt === 1) await second.scope.delete(deleted);
+      });
+      const create = vi.spyOn(navigator.credentials, 'create');
+      const get = vi.spyOn(navigator.credentials, 'get');
+
+      await first.vault.protect();
+
+      expect([create.mock.calls.length, get.mock.calls.length]).toEqual([1, 0]);
+      expect((await first.scope.list()).map((k) => k.id)).toEqual([kept.id]);
+      expect((await readAll(first.name)).keys).toHaveLength(1);
+      await expectSigns(first.scope, [kept]);
+      await expectVaultError(first.scope.sign(deleted, message), 'not-found');
+    });
+
+    test('protect held after its prompt while another instance writes a passkey key: it commits with no new prompt, and both keys sign', async () => {
+      tickingClock();
+      const [first, second] = await openContexts();
+      const sealed = asSealed(await first.scope.generate(type));
+      let passkeyKey: KeyInfo<'passkey'> | undefined;
+      beforeProtectWrite(async (attempt) => {
+        if (attempt === 1) passkeyKey = await second.scope.generate('passkey');
+      });
+      const create = vi.spyOn(navigator.credentials, 'create');
+      const get = vi.spyOn(navigator.credentials, 'get');
+
+      await first.vault.protect();
+
+      expect([create.mock.calls.length, get.mock.calls.length]).toEqual([2, 0]); // the unlock passkey and the passkey key
+      if (!passkeyKey) throw new Error('no passkey key generated');
+      expect((await first.scope.list()).map((k) => k.id)).toEqual([sealed.id, passkeyKey.id]);
+      await expectSigns(first.scope, [sealed]);
+      await expect(first.scope.sign(passkeyKey, message)).resolves.toMatchObject({ type: 'passkey' });
+    });
+
+    test('protect held after its prompt while another instance wipes: it redoes against the empty vault, with no new prompt, and leaves a protected vault with no keys', async () => {
+      const [first, second] = await openContexts();
+      const wiped = asSealed(await first.scope.generate(type));
+      beforeProtectWrite(async (attempt) => {
+        if (attempt === 1) await second.vault.wipe();
+      });
+      const create = vi.spyOn(navigator.credentials, 'create');
+      const get = vi.spyOn(navigator.credentials, 'get');
+
+      await first.vault.protect();
+
+      expect([create.mock.calls.length, get.mock.calls.length]).toEqual([1, 0]);
+      const { meta, keys } = await readAll(first.name);
+      expect(meta).toEqual([expect.objectContaining({ protection: expect.objectContaining({ kind: 'passkey' }) })]);
+      expect(keys).toEqual([]);
+      expect([await first.vault.state(), await second.vault.state()]).toEqual(['unlocked', 'locked']);
+      await expectVaultError(first.scope.sign(wiped, message), 'not-found');
+    });
+
+    test('protect whose every attempt meets another instance’s generate fails with unavailable, with no new prompt; the vault stays unprotected and every key signs', async () => {
+      tickingClock();
+      const [first, second] = await openContexts();
+      const keys = [asSealed(await first.scope.generate(type))];
+      beforeProtectWrite(async () => {
+        keys.push(asSealed(await second.scope.generate(type)));
+      });
+      const create = vi.spyOn(navigator.credentials, 'create');
+      const get = vi.spyOn(navigator.credentials, 'get');
+
+      await expectVaultError(first.vault.protect(), 'unavailable');
+
+      expect([create.mock.calls.length, get.mock.calls.length]).toEqual([1, 0]);
+      expect(keys.length).toBeGreaterThan(2); // redone, more than once
+      expect([await first.vault.state(), await second.vault.state()]).toEqual(['unprotected', 'unprotected']);
+      expect((await first.scope.list()).map((k) => k.id)).toEqual(keys.map((k) => k.id));
+      await expectSigns(first.scope, keys);
+    });
+
+    test('a generate held while another instance protects is redone against the protected header, and its key signs after unlock', async () => {
+      tickingClock();
+      const [first, second] = await openContexts();
+      const existing = asSealed(await first.scope.generate(type));
+      const unprotected = await readHeader(first.name);
+      const held = holdGenerate(type); // first has read the unprotected header it would seal to
+
+      const pending = first.scope.generate(type);
+      await held.reached;
+      await second.vault.protect();
+      held.release();
+      const key = asSealed(await pending);
+
+      const header = await readHeader(first.name);
+      expect(header.wrappingPublicKey).not.toEqual(unprotected.wrappingPublicKey);
+      expect(header.protection.kind).toBe('passkey');
+      await expectSigns(second.scope, [existing, key]); // the protecting instance is unlocked
+      await expectVaultError(first.scope.sign(key, message), 'locked');
+      pickPasskey(await unlockPasskeyId(first.name));
+      await first.vault.unlock();
+      await expectSigns(first.scope, [existing, key]);
+    });
+
+    test('an unlocked instance, after another wipes, reports empty and its old keys are not-found; after another wipes and protects again, it reports locked and sealed sign is locked', async () => {
+      const [first, second] = await openContexts();
+      const old = asSealed(await first.scope.generate(type));
+      await first.vault.protect();
+
+      await second.vault.wipe();
+
+      expect(await first.vault.state()).toBe('empty');
+      await expectVaultError(first.scope.sign(old, message), 'not-found');
+
+      await first.vault.protect(); // unlocked again, under a vault of its own
+      const key = asSealed(await first.scope.generate(type));
+      await expectSigns(first.scope, [key]);
+      await second.vault.wipe();
+      const fresh = asSealed(await second.scope.generate(type));
+      await second.vault.protect();
+
+      expect(await first.vault.state()).toBe('locked');
+      await expectVaultError(first.scope.sign(fresh, message), 'locked');
+      await expectVaultError(first.scope.sign(key, message), 'not-found');
+    });
+  });
+});

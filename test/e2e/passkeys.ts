@@ -78,10 +78,14 @@ export async function freshDevice(
   return { context, ...(await openWithAuthenticator(context, browserName, passkeys)) };
 }
 
-/** A CTAP2 platform authenticator with resident keys, which answers every prompt at once with the user verified. */
+/**
+ * A CTAP2 platform authenticator with resident keys, which answers every prompt at once with the user verified;
+ * with `prf`, it returns PRF results at creation and at assertion (CTAP `prf`).
+ */
 export async function addVirtualAuthenticator(
   page: Page,
   passkeys: readonly MovablePasskey[] = [],
+  { prf = false }: { prf?: boolean } = {},
 ): Promise<VirtualAuthenticator> {
   const session = await page.context().newCDPSession(page);
   await session.send('WebAuthn.enable', { enableUI: false });
@@ -93,6 +97,7 @@ export async function addVirtualAuthenticator(
       hasUserVerification: true,
       isUserVerified: true,
       automaticPresenceSimulation: true,
+      hasPrf: prf,
     },
   });
   for (const passkey of passkeys) await addCredential(session, authenticatorId, passkey);
@@ -287,4 +292,127 @@ export function verifiesOutsideVault(
   const key = createPublicKey({ key: Buffer.from(publicKey), format: 'der', type: 'spki' });
   const signed = Buffer.concat([data, sha256(Buffer.from(clientDataJSON))]);
   return verify('sha256', signed, { key, dsaEncoding: 'der' }, Buffer.from(signature));
+}
+
+/**
+ * Answers every passkey prompt of `page` with the authenticator of `keeper`, another page of the same origin, as a
+ * synced or roaming authenticator answers in any tab: `keeper` runs the real WebAuthn call, and `page` gets its answer
+ * as a PublicKeyCredential. Needed for PRF in more than one page: Chromium's virtual authenticator belongs to the page
+ * whose CDP session added it, and a credential copied to another one returns no PRF result (CDP's Credential carries
+ * no PRF secret). Install before `page` first prompts; `prompts()` counts the prompts `page` showed.
+ */
+export async function answerPromptsFrom(page: Page, keeper: Page): Promise<{ prompts: () => number }> {
+  let prompts = 0;
+  await page.exposeFunction('relayPrompt', (kind: 'create' | 'get', options: unknown) => {
+    prompts++;
+    return keeper.evaluate(
+      async ({ kind, options }) => {
+        // Bytes cross between pages as { $bytes: number[] }; everything else as it is.
+        const encode = (value: unknown): unknown =>
+          value instanceof ArrayBuffer
+            ? { $bytes: Array.from(new Uint8Array(value)) }
+            : ArrayBuffer.isView(value)
+              ? { $bytes: Array.from(new Uint8Array(value.buffer, value.byteOffset, value.byteLength)) }
+              : Array.isArray(value)
+                ? value.map(encode)
+                : value !== null && typeof value === 'object'
+                  ? Object.fromEntries(Object.entries(value).map(([k, v]) => [k, encode(v)]))
+                  : value;
+        const decode = (value: unknown): unknown =>
+          Array.isArray(value)
+            ? value.map(decode)
+            : value !== null && typeof value === 'object'
+              ? '$bytes' in value && Array.isArray(value.$bytes)
+                ? Uint8Array.from(value.$bytes)
+                : Object.fromEntries(Object.entries(value).map(([k, v]) => [k, decode(v)]))
+              : value;
+        try {
+          // `as`: the options Vault passed to its own create or get, decoded unchanged
+          const publicKey = decode(options) as never;
+          const credential = await (kind === 'create'
+            ? navigator.credentials.create({ publicKey })
+            : navigator.credentials.get({ publicKey }));
+          if (!(credential instanceof PublicKeyCredential)) throw new Error('no public key credential');
+          const r = credential.response;
+          const response =
+            r instanceof AuthenticatorAttestationResponse
+              ? {
+                  clientDataJSON: r.clientDataJSON,
+                  attestationObject: r.attestationObject,
+                  publicKey: r.getPublicKey(),
+                  algorithm: r.getPublicKeyAlgorithm(),
+                }
+              : r instanceof AuthenticatorAssertionResponse
+                ? {
+                    clientDataJSON: r.clientDataJSON,
+                    authenticatorData: r.authenticatorData,
+                    signature: r.signature,
+                    userHandle: r.userHandle,
+                  }
+                : undefined;
+          const { id, rawId } = credential;
+          return encode({ ok: { id, rawId, response, extensions: credential.getClientExtensionResults() } });
+        } catch (error) {
+          const { name, message } = error instanceof Error ? error : { name: 'Error', message: String(error) };
+          return { error: { name, message } };
+        }
+      },
+      { kind, options },
+    );
+  });
+  await page.evaluate(() => {
+    const { relayPrompt } = globalThis as Record<string, unknown>;
+    if (typeof relayPrompt !== 'function') throw new Error('relayPrompt missing');
+    const encode = (value: unknown): unknown =>
+      ArrayBuffer.isView(value)
+        ? { $bytes: Array.from(new Uint8Array(value.buffer, value.byteOffset, value.byteLength)) }
+        : value instanceof ArrayBuffer
+          ? { $bytes: Array.from(new Uint8Array(value)) }
+          : Array.isArray(value)
+            ? value.map(encode)
+            : value !== null && typeof value === 'object'
+              ? Object.fromEntries(Object.entries(value).map(([k, v]) => [k, encode(v)]))
+              : value;
+    // Bytes come back as ArrayBuffers, as WebAuthn returns them.
+    const decode = (value: unknown): unknown =>
+      Array.isArray(value)
+        ? value.map(decode)
+        : value !== null && typeof value === 'object'
+          ? '$bytes' in value && Array.isArray(value.$bytes)
+            ? Uint8Array.from(value.$bytes).buffer
+            : Object.fromEntries(Object.entries(value).map(([k, v]) => [k, decode(v)]))
+          : value;
+    const field = (value: unknown) => ({ value });
+    const relay = async (kind: 'create' | 'get', options?: CredentialCreationOptions | CredentialRequestOptions) => {
+      // `as`: the keeper's answer, built just above in the same shape
+      const answer = decode(await relayPrompt(kind, encode(options?.publicKey))) as {
+        error?: { name: string; message: string };
+        ok?: { id: string; rawId: ArrayBuffer; response: Record<string, unknown>; extensions: unknown };
+      };
+      if (answer.error) throw new DOMException(answer.error.message, answer.error.name);
+      if (!answer.ok) throw new Error('no answer');
+      const { id, rawId, response, extensions } = answer.ok;
+      const fields = Object.fromEntries(Object.entries(response).map(([k, v]) => [k, field(v)]));
+      const responseObject =
+        kind === 'create'
+          ? Object.create(AuthenticatorAttestationResponse.prototype, {
+              ...fields,
+              getPublicKey: field(() => response.publicKey),
+              getPublicKeyAlgorithm: field(() => response.algorithm),
+            })
+          : Object.create(AuthenticatorAssertionResponse.prototype, fields);
+      return Object.create(PublicKeyCredential.prototype, {
+        id: field(id),
+        rawId: field(rawId),
+        type: field('public-key'),
+        response: field(responseObject),
+        getClientExtensionResults: field(() => extensions),
+      });
+    };
+    Object.assign(navigator.credentials, {
+      create: (options?: CredentialCreationOptions) => relay('create', options),
+      get: (options?: CredentialRequestOptions) => relay('get', options),
+    });
+  });
+  return { prompts: () => prompts };
 }
