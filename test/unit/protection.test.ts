@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, expectTypeOf, test, vi } from 'vitest';
+import { server } from 'vitest/browser';
 import { Vault, type KeyInfo, type Scope } from '../../src/index.ts';
 import {
   addVirtualAuthenticator,
@@ -977,5 +978,84 @@ describe.runIf(hasVirtualAuthenticator)('protection across instances', () => {
       await expectVaultError(first.scope.sign(fresh, message), 'locked');
       await expectVaultError(first.scope.sign(key, message), 'not-found');
     });
+  });
+});
+
+// Every engine: detection reads only the page's WebAuthn globals, so each case sets them by hand (D-75).
+describe('protection support', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    Reflect.deleteProperty(navigator, 'credentials'); // the case's own property; the engine's, if any, shows again
+  });
+
+  /** A PublicKeyCredential class whose getClientCapabilities() is `capabilities`. */
+  const withCapabilities = (capabilities: () => Promise<Record<string, boolean>>) =>
+    class {
+      static getClientCapabilities = capabilities;
+    };
+
+  /**
+   * Sets the page's WebAuthn: `PublicKeyCredential`, and a `navigator.credentials` whose prompting calls are counted,
+   * or none. Opened databases are counted too.
+   */
+  function setWebAuthn(publicKeyCredential: unknown, credentials: boolean) {
+    vi.stubGlobal('PublicKeyCredential', publicKeyCredential);
+    const prompts = { create: vi.fn(), get: vi.fn() };
+    const value = credentials ? prompts : undefined;
+    Object.defineProperty(navigator, 'credentials', { value, configurable: true });
+    const opened = vi.spyOn(indexedDB, 'open');
+    return { prompts, opened };
+  }
+
+  const prfTrue = withCapabilities(async () => ({ 'extension:prf': true }));
+  const supportCases = [
+    { name: 'no PublicKeyCredential', publicKeyCredential: undefined, credentials: true, expected: 'unsupported' },
+    {
+      name: 'a PublicKeyCredential that is no constructor, as in Playwright’s WebKit on Linux',
+      publicKeyCredential: { getClientCapabilities: async () => ({ 'extension:prf': true }) },
+      credentials: true,
+      expected: 'unsupported',
+    },
+    { name: 'no navigator.credentials', publicKeyCredential: prfTrue, credentials: false, expected: 'unsupported' },
+    {
+      name: 'extension:prf reported false',
+      publicKeyCredential: withCapabilities(async () => ({ 'extension:prf': false })),
+      credentials: true,
+      expected: 'unsupported',
+    },
+    { name: 'extension:prf reported true', publicKeyCredential: prfTrue, credentials: true, expected: 'unknown' },
+    {
+      name: 'no extension:prf key',
+      publicKeyCredential: withCapabilities(async () => ({ conditionalGet: true })),
+      credentials: true,
+      expected: 'unknown',
+    },
+    { name: 'no getClientCapabilities', publicKeyCredential: class {}, credentials: true, expected: 'unknown' },
+    {
+      name: 'getClientCapabilities rejecting',
+      publicKeyCredential: withCapabilities(() => Promise.reject(new DOMException('Not allowed', 'NotAllowedError'))),
+      credentials: true,
+      expected: 'unknown',
+    },
+  ] as const;
+  test.each(supportCases)(
+    'protectionSupport() with $name is $expected, with no prompt and no database opened',
+    async ({ publicKeyCredential, credentials, expected }) => {
+      const { prompts, opened } = setWebAuthn(publicKeyCredential, credentials);
+      expect(await Vault.protectionSupport()).toBe(expected);
+      expect(prompts.create).not.toHaveBeenCalled();
+      expect(prompts.get).not.toHaveBeenCalled();
+      expect(opened).not.toHaveBeenCalled();
+    },
+  );
+
+  test('protectionSupport() with the engine’s own WebAuthn is unknown in Chromium and Firefox, unsupported in Playwright’s WebKit, which has none', async () => {
+    expect(await Vault.protectionSupport()).toBe(server.browser === 'webkit' ? 'unsupported' : 'unknown');
+  });
+
+  test('protectionSupport() takes no argument and returns exactly unsupported or unknown', () => {
+    expectTypeOf(Vault.protectionSupport).parameters.toEqualTypeOf<[]>();
+    expectTypeOf(Vault.protectionSupport).returns.toEqualTypeOf<Promise<'unsupported' | 'unknown'>>();
   });
 });

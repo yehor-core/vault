@@ -133,7 +133,10 @@ export async function watchChanges(page: Page): Promise<{ calls: () => number }>
   return { calls: () => calls };
 }
 
-/** Protects the demo's vault from the page's console; its prompts go to the page's authenticator. */
+/**
+ * Protects the demo's vault from the page's console; its prompts go to the page's authenticator. A VaultError is
+ * rethrown as `VaultError <code>: …`: page.evaluate keeps only the message.
+ */
 export async function protect(page: Page): Promise<void> {
   await page.evaluate(async () => {
     // `as`: the global the dev demo sets; undefined fails the call below
@@ -141,6 +144,10 @@ export async function protect(page: Page): Promise<void> {
     const vault = await Vault.open();
     try {
       await vault.protect();
+    } catch (error) {
+      throw error instanceof Error && error.name === 'VaultError' && 'code' in error
+        ? new Error(`VaultError ${String(error.code)}: ${error.message}`)
+        : error;
     } finally {
       vault.close();
     }

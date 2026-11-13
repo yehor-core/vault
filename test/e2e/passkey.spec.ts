@@ -1,5 +1,6 @@
+import type { ProtectionSupport } from '../../src/index.ts';
 import { expect, test, type Page } from '@playwright/test';
-import { DEMO_SCOPE, openDemo } from './contexts.ts';
+import { DEMO_SCOPE, generate, keepVault, metaRecords, openDemo, protect, verifies, type PageKey } from './contexts.ts';
 import {
   addPasskey,
   addVirtualAuthenticator,
@@ -99,6 +100,64 @@ test.describe('Chromium virtual authenticator', () => {
     await expectVaultError(signWithPasskey(page, key, message), 'unsupported');
   });
 });
+
+// D-80: protect() fails cleanly in every engine. The authenticator returns no PRF result: in Firefox and WebKit it is
+// Playwright's stand-in, which never does; in Chromium the virtual authenticator, made without PRF.
+test('with an authenticator that returns no PRF result, protectionSupport is unknown, protect fails with unsupported, and the vault stays unprotected with every key signing', async ({
+  context,
+  browserName,
+}) => {
+  const { page } = await openWithAuthenticator(context, browserName);
+  const sealed = await generate(page);
+  const passkey = await generatePasskey(page);
+  const [header] = await metaRecords(page);
+  expect(await protectionSupport(page)).toBe('unknown');
+
+  await expectVaultError(protect(page), 'unsupported');
+
+  const vault = await keepVault(page);
+  expect(await vault.state()).toBe('unprotected');
+  expect(await metaRecords(page)).toEqual([header]); // the same wrapping public key
+  const [signature] = await signSealed(page, [sealed], message);
+  if (!signature) throw new Error('no signature');
+  expect(await verifies(sealed.publicKey, signature, message)).toBe(true);
+  const assertion = await signWithPasskey(page, passkey, message);
+  expect(verifiesOutsideVault(passkey.publicKey, assertion, message, originOf(page))).toBe(true);
+});
+
+/** `Vault.protectionSupport()` in the page. */
+async function protectionSupport(page: Page): Promise<ProtectionSupport> {
+  return page.evaluate(() => {
+    // `as`: the global the dev demo sets; undefined fails the call below
+    const { Vault } = globalThis as unknown as { Vault: typeof import('../../src/index.ts').Vault };
+    return Vault.protectionSupport();
+  });
+}
+
+/** The signature of `message` the page makes with each of `keys`, sealed keys of the demo scope, in order. */
+async function signSealed(page: Page, keys: PageKey[], message: string): Promise<number[][]> {
+  return page.evaluate(
+    async ({ scope, ids, message }) => {
+      // `as`: the global the dev demo sets; undefined fails the call below
+      const { Vault } = globalThis as unknown as { Vault: typeof import('../../src/index.ts').Vault };
+      const vault = await Vault.open();
+      try {
+        const listed = await vault.scope(scope).list();
+        return await Promise.all(
+          ids.map(async (id) => {
+            const key = listed.find((candidate) => candidate.id === id);
+            if (!key || key.type === 'passkey') throw new Error(`no sealed key ${id} to sign with`);
+            const signature = await vault.scope(scope).sign(key, new TextEncoder().encode(message));
+            return Array.from(signature.bytes);
+          }),
+        );
+      } finally {
+        vault.close();
+      }
+    },
+    { scope: DEMO_SCOPE, ids: keys.map((key) => key.id), message },
+  );
+}
 
 type PromptingCall = 'generate' | 'sign' | 'add';
 
