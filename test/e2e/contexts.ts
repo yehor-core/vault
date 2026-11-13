@@ -147,11 +147,11 @@ export async function protect(page: Page): Promise<void> {
   });
 }
 
-/** What a kept vault's `sign` step returns: each key's public key and signature, or the VaultError code. */
-export type SignedKeys = { publicKey: number[]; signature: number[] }[] | { error: string };
-
 /** A failed step of a kept vault: the code of its VaultError. */
 type Failed = { error: string };
+
+/** What a kept vault's `sign` step returns: each key's public key and signature, or the VaultError code. */
+export type SignedKeys = { publicKey: number[]; signature: number[] }[] | Failed;
 
 /**
  * Opens the demo's vault in `page` and keeps it open, as a tab does: every step runs on that one instance, so an

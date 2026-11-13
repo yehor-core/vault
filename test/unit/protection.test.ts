@@ -789,6 +789,13 @@ function beforeProtectWrite(write: (attempt: number) => unknown): void {
   });
 }
 
+/** Counts the passkey prompts from here on, as [creations, assertions]. Restored by vi.restoreAllMocks. */
+function countPrompts(): () => [number, number] {
+  const create = vi.spyOn(navigator.credentials, 'create');
+  const get = vi.spyOn(navigator.credentials, 'get');
+  return () => [create.mock.calls.length, get.mock.calls.length];
+}
+
 // Chromium only, as above (D-80). Two instances of one database are two contexts (concurrency.test.ts).
 describe.runIf(hasVirtualAuthenticator)('protection across instances', () => {
   beforeEach(async () => {
@@ -818,12 +825,11 @@ describe.runIf(hasVirtualAuthenticator)('protection across instances', () => {
       beforeProtectWrite(async (attempt) => {
         if (attempt === 1) generated = asSealed(await second.scope.generate(type));
       });
-      const create = vi.spyOn(navigator.credentials, 'create');
-      const get = vi.spyOn(navigator.credentials, 'get');
+      const prompts = countPrompts();
 
       await first.vault.protect();
 
-      expect([create.mock.calls.length, get.mock.calls.length]).toEqual([1, 0]);
+      expect(prompts()).toEqual([1, 0]);
       if (!generated) throw new Error('no key generated');
       expect((await first.scope.list()).map((k) => k.id)).toEqual([existing.id, generated.id]);
       expect(await first.vault.state()).toBe('unlocked');
@@ -843,12 +849,11 @@ describe.runIf(hasVirtualAuthenticator)('protection across instances', () => {
       beforeProtectWrite(async (attempt) => {
         if (attempt === 1) await second.scope.delete(deleted);
       });
-      const create = vi.spyOn(navigator.credentials, 'create');
-      const get = vi.spyOn(navigator.credentials, 'get');
+      const prompts = countPrompts();
 
       await first.vault.protect();
 
-      expect([create.mock.calls.length, get.mock.calls.length]).toEqual([1, 0]);
+      expect(prompts()).toEqual([1, 0]);
       expect((await first.scope.list()).map((k) => k.id)).toEqual([kept.id]);
       expect((await readAll(first.name)).keys).toHaveLength(1);
       await expectSigns(first.scope, [kept]);
@@ -863,12 +868,11 @@ describe.runIf(hasVirtualAuthenticator)('protection across instances', () => {
       beforeProtectWrite(async (attempt) => {
         if (attempt === 1) passkeyKey = await second.scope.generate('passkey');
       });
-      const create = vi.spyOn(navigator.credentials, 'create');
-      const get = vi.spyOn(navigator.credentials, 'get');
+      const prompts = countPrompts();
 
       await first.vault.protect();
 
-      expect([create.mock.calls.length, get.mock.calls.length]).toEqual([2, 0]); // the unlock passkey and the passkey key
+      expect(prompts()).toEqual([2, 0]); // the unlock passkey and the passkey key
       if (!passkeyKey) throw new Error('no passkey key generated');
       expect((await first.scope.list()).map((k) => k.id)).toEqual([sealed.id, passkeyKey.id]);
       await expectSigns(first.scope, [sealed]);
@@ -881,12 +885,11 @@ describe.runIf(hasVirtualAuthenticator)('protection across instances', () => {
       beforeProtectWrite(async (attempt) => {
         if (attempt === 1) await second.vault.wipe();
       });
-      const create = vi.spyOn(navigator.credentials, 'create');
-      const get = vi.spyOn(navigator.credentials, 'get');
+      const prompts = countPrompts();
 
       await first.vault.protect();
 
-      expect([create.mock.calls.length, get.mock.calls.length]).toEqual([1, 0]);
+      expect(prompts()).toEqual([1, 0]);
       const { meta, keys } = await readAll(first.name);
       expect(meta).toEqual([expect.objectContaining({ protection: expect.objectContaining({ kind: 'passkey' }) })]);
       expect(keys).toEqual([]);
@@ -901,16 +904,33 @@ describe.runIf(hasVirtualAuthenticator)('protection across instances', () => {
       beforeProtectWrite(async () => {
         keys.push(asSealed(await second.scope.generate(type)));
       });
-      const create = vi.spyOn(navigator.credentials, 'create');
-      const get = vi.spyOn(navigator.credentials, 'get');
+      const prompts = countPrompts();
 
       await expectVaultError(first.vault.protect(), 'unavailable');
 
-      expect([create.mock.calls.length, get.mock.calls.length]).toEqual([1, 0]);
-      expect(keys.length).toBeGreaterThan(2); // redone, more than once
+      expect(prompts()).toEqual([1, 0]);
+      expect(keys).toHaveLength(1 + 3); // one write met by each of the 3 attempts
       expect([await first.vault.state(), await second.vault.state()]).toEqual(['unprotected', 'unprotected']);
       expect((await first.scope.list()).map((k) => k.id)).toEqual(keys.map((k) => k.id));
       await expectSigns(first.scope, keys);
+    });
+
+    test('protect whose read header a storage writer replaces before its write, the keys left, writes nothing: its redo finds keys the new header cannot open, corrupted', async () => {
+      const { vault, scope, name } = await openVault();
+      await scope.generate(type);
+      const { scope: anotherScope, name: anotherName } = await openVault();
+      await anotherScope.generate(type);
+      const replacement = await readHeader(anotherName);
+      beforeProtectWrite(async (attempt) => {
+        if (attempt === 1) await writeHeader(name, replacement);
+      });
+      const prompts = countPrompts();
+
+      await expectVaultError(vault.protect(), 'corrupted');
+
+      expect(prompts()).toEqual([1, 0]);
+      expect((await readAll(name)).meta).toEqual([replacement]);
+      expect(await vault.state()).toBe('unprotected');
     });
 
     test('a generate held while another instance protects is redone against the protected header, and its key signs after unlock', async () => {

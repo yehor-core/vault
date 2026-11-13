@@ -1,6 +1,6 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 import { expectKeysSigned, generate, keepVault, metaRecords, openDemo, type PageKey } from './contexts.ts';
-import { addVirtualAuthenticator, answerPromptsFrom } from './passkeys.ts';
+import { addVirtualAuthenticator, answerPromptsFrom, PRF_CHROMIUM_ONLY } from './passkeys.ts';
 
 // Crash safety (D-38): the page goes away while the first generate writes the header and the key. Atomicity
 // is a property of the storage write, not of a key type: one type is enough.
@@ -163,7 +163,7 @@ for (const cut of cutPoints) {
       context,
       browserName,
     }, testInfo) => {
-      testInfo.skip(browserName !== 'chromium', 'Only Chromium’s virtual authenticator returns PRF results (D-80)');
+      testInfo.skip(browserName !== 'chromium', PRF_CHROMIUM_ONLY);
       const keeper = await openDemo(context);
       await addVirtualAuthenticator(keeper, [], { prf: true });
       const { page } = await openAnswered(context, keeper);

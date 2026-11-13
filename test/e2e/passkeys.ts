@@ -122,6 +122,8 @@ export async function addVirtualAuthenticator(
   };
 }
 
+export const PRF_CHROMIUM_ONLY = 'Only Chromium’s virtual authenticator returns PRF results (D-80)';
+
 export const CHROMIUM_ONLY =
   'Only Chromium’s virtual authenticator can decline a prompt or answer without user verification (D-62)';
 
@@ -364,10 +366,10 @@ export async function answerPromptsFrom(page: Page, keeper: Page): Promise<{ pro
     const { relayPrompt } = globalThis as Record<string, unknown>;
     if (typeof relayPrompt !== 'function') throw new Error('relayPrompt missing');
     const encode = (value: unknown): unknown =>
-      ArrayBuffer.isView(value)
-        ? { $bytes: Array.from(new Uint8Array(value.buffer, value.byteOffset, value.byteLength)) }
-        : value instanceof ArrayBuffer
-          ? { $bytes: Array.from(new Uint8Array(value)) }
+      value instanceof ArrayBuffer
+        ? { $bytes: Array.from(new Uint8Array(value)) }
+        : ArrayBuffer.isView(value)
+          ? { $bytes: Array.from(new Uint8Array(value.buffer, value.byteOffset, value.byteLength)) }
           : Array.isArray(value)
             ? value.map(encode)
             : value !== null && typeof value === 'object'

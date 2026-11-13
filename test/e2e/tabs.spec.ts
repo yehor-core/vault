@@ -15,7 +15,7 @@ import {
   watchChanges,
   wipe,
 } from './contexts.ts';
-import { addVirtualAuthenticator, answerPromptsFrom } from './passkeys.ts';
+import { addVirtualAuthenticator, answerPromptsFrom, PRF_CHROMIUM_ONLY } from './passkeys.ts';
 
 // Several tabs on one vault (D-43): two pages of one browser context share its IndexedDB, as two tabs do.
 // One interleaving per property; the unit tests in concurrency.test.ts run the others. One key type: the write
@@ -96,7 +96,7 @@ test('protect in one tab: the other tab is told, reports locked, unlocks with on
   context,
   browserName,
 }, testInfo) => {
-  testInfo.skip(browserName !== 'chromium', 'Only Chromium’s virtual authenticator returns PRF results (D-80)');
+  testInfo.skip(browserName !== 'chromium', PRF_CHROMIUM_ONLY);
   const a = await openDemo(context);
   await addVirtualAuthenticator(a, [], { prf: true });
   const b = await openDemo(context);
