@@ -1,6 +1,7 @@
 import { base64url, encode, isString, type Bytes } from './bytes.ts';
 import { VaultError } from './errors.ts';
 import { isKeyTypeName, isWellFormedKeyTypeName, keyType, type KeyTypeName } from './key-types.ts';
+import { parseUnlockProtection, UNLOCK_KIND, type UnlockProtection } from './protection.ts';
 import {
   assertOnlyFields,
   corrupted,
@@ -26,8 +27,11 @@ export interface HeaderRecord {
   readonly v: typeof FORMAT_VERSION;
   /** SPKI, P-256. */
   readonly wrappingPublicKey: Bytes;
-  /** Unprotected: the wrapping private key itself, as a non-extractable CryptoKey. */
-  readonly protection: { readonly kind: 'none'; readonly privateKey: CryptoKey };
+  /**
+   * Unprotected: the wrapping private key itself, as a non-extractable CryptoKey. Protected: that key wrapped under a
+   * key only the unlock credential gives (D-81).
+   */
+  readonly protection: { readonly kind: 'none'; readonly privateKey: CryptoKey } | UnlockProtection;
 }
 
 /** The fields every key record has, whatever its type. */
@@ -108,9 +112,9 @@ export function parseHeader(value: unknown): HeaderRecord {
   };
 }
 
-// Only unprotected so far; protection adds its kind (and its fields) here.
 function parseProtection(value: unknown): HeaderRecord['protection'] {
   const protection = readObject(value, 'header.protection');
+  if (protection.kind === UNLOCK_KIND) return parseUnlockProtection(protection);
   if (protection.kind !== 'none') throw corrupted('header.protection.kind');
   assertOnlyFields(protection, 'header.protection', ['kind', 'privateKey']);
   return { kind: 'none', privateKey: readCryptoKey(protection.privateKey, 'header.protection.privateKey') };

@@ -17,6 +17,8 @@ export interface SealedScheme {
   generate(): Promise<GeneratedKey>;
   /** Decrypts `sealed` with `cipher` and signs `data`. */
   sign(sealed: Bytes, cipher: Cipher, data: Bytes): Promise<Bytes>;
+  /** Decrypts `sealed` with `from` and encrypts the private key again with `to`. */
+  reseal(sealed: Bytes, from: Cipher, to: Cipher): Promise<ArrayBuffer>;
   verify(publicKey: Bytes, signature: Bytes, data: Bytes): Promise<boolean>;
 }
 
@@ -79,6 +81,19 @@ export function sealedKeyType(scheme: SealedScheme): SealedKeyType {
       const valid = await scheme.verify(record.publicKey, bytes, data).catch(() => false);
       if (!valid) throw corrupted(`key ${record.id} does not match its public key`);
       return { bytes };
+    },
+
+    async reseal(stored, wrappingPublicKey) {
+      const { record, header } = stored;
+      const privateKey = stored.wrappingPrivateKey(); // outside the try: a failure to get it is not a corrupted key
+      const aad = keyAad(record);
+      try {
+        const from = await unseal(privateKey, header.wrappingPublicKey, record.sealed, aad);
+        const sealed = await seal(wrappingPublicKey, aad, (to) => scheme.reseal(record.sealed.ciphertext, from, to));
+        return { sealed };
+      } catch (cause) {
+        throw corrupted(`key ${record.id} does not decrypt`, cause); // a fresh wrapping public key always imports
+      }
     },
   };
 }

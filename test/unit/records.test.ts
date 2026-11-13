@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { Vault } from '../../src/index.ts';
 import { keyAad } from '../../src/key-types/sealed.ts';
+import { protectionAad } from '../../src/protection.ts';
 import { keyId, parseHeader, parseKeyRecord } from '../../src/records.ts';
 import {
   cleanup,
@@ -81,6 +82,15 @@ describe('format v1 regression', () => {
     // prettier-ignore
     const expected = V1.keyAad + '01000000056c6162656c' + '010000000c506169656d656e747320c3a9';
     expect(keyAad(fields).toHex()).toBe(expected);
+  });
+
+  // D-81: the protected header's AAD is its domain separator, then v, wrappingPublicKey, kind, credentialId and salt.
+  // Derived by hand from the encoding, not by running the code: 01 0000000f 'vault/v1/header', 03 00000008 1,
+  // 02 00000004 00010203, 01 00000007 'passkey', 02 00000002 aabb, 02 00000020 then 32 bytes of 11.
+  test('protectionAad of fixed fields is unchanged', () => {
+    // prettier-ignore
+    const expected = '010000000f7661756c742f76312f686561646572030000000800000000000000010200000004000102030100000007706173736b65790200000002aabb02000000201111111111111111111111111111111111111111111111111111111111111111';
+    expect(protectionAad(1, bytes('00010203'), bytes('aabb'), new Uint8Array(32).fill(0x11)).toHex()).toBe(expected);
   });
 
   // S1 had one fixed scope, 'default'; its records live on in the ordinary scope of that name.
@@ -192,9 +202,9 @@ describe('format: secp256k1 known answer', () => {
 
 /** A real header and key record, as Vault stored them. */
 async function storedRecords() {
-  const { scope, name } = await openVault();
+  const { vault, scope, name } = await openVault();
   const key = await scope.generate('ed25519');
-  return { scope, name, header: await readHeader(name), record: await readKey(name, scope.name, key.id) };
+  return { vault, scope, name, header: await readHeader(name), record: await readKey(name, scope.name, key.id) };
 }
 
 async function expectCorruptedMessage(parse: () => unknown, what: string) {
@@ -217,7 +227,7 @@ describe('strict parsing', () => {
     [
       'unknown protection kind',
       'header.protection.kind',
-      (h) => ({ ...h, protection: { ...h.protection, kind: 'passkey' } }),
+      (h) => ({ ...h, protection: { ...h.protection, kind: 'pin' } }),
     ],
     [
       'root not a CryptoKey',
@@ -348,6 +358,76 @@ describe('strict parsing', () => {
     await writeHeader(name, { ...header, extra: 1 });
     await expectVaultError(scope.list(), 'corrupted');
   });
+});
+
+/** A well-formed protected header in place of `header`: its fields' values are random, Vault can't tell without unlocking. */
+function plantedProtected(header: any): any {
+  const random = (length: number) => crypto.getRandomValues(new Uint8Array(length));
+  return {
+    v: header.v,
+    wrappingPublicKey: header.wrappingPublicKey,
+    protection: {
+      kind: 'passkey',
+      credentialId: random(16),
+      salt: random(32),
+      iv: random(12),
+      wrappedPrivateKey: random(138),
+    },
+  };
+}
+
+// Every engine: the header is planted, so no authenticator is needed. Sign is of a sealed key; the type doesn't matter.
+describe('protected header', () => {
+  const message = new TextEncoder().encode('message');
+
+  test('a well-formed protected header parses as it is; the vault reads as locked', async () => {
+    const { scope, name, header, record } = await storedRecords();
+    const planted = plantedProtected(header);
+    await writeHeader(name, planted);
+
+    expect(parseHeader(planted)).toEqual(planted);
+    expect(await scope.list()).toHaveLength(1);
+    await scope.generate('ed25519');
+    await expectVaultError(scope.sign(keyRef(scope, record.id, 'ed25519'), message), 'locked');
+  });
+
+  const protectedCases: [label: string, what: string, edit: (protection: any) => unknown][] = [
+    ...['credentialId', 'salt', 'iv', 'wrappedPrivateKey'].map((field): [string, string, (p: any) => unknown] => [
+      `${field} missing`,
+      `header.protection.${field}`,
+      ({ [field]: _, ...rest }) => rest,
+    ]),
+    ['an extra field', 'header.protection: unexpected field privateKey', (p) => ({ ...p, privateKey: {} })],
+    ['credentialId as a string', 'header.protection.credentialId', (p) => ({ ...p, credentialId: 'id' })],
+    ['salt of 31 bytes', 'header.protection.salt', (p) => ({ ...p, salt: p.salt.slice(0, 31) })],
+    ['salt of 33 bytes', 'header.protection.salt', (p) => ({ ...p, salt: Uint8Array.of(...p.salt, 0) })],
+    ['iv of 11 bytes', 'header.protection.iv', (p) => ({ ...p, iv: p.iv.slice(0, 11) })],
+    ['iv of 13 bytes', 'header.protection.iv', (p) => ({ ...p, iv: Uint8Array.of(...p.iv, 0) })],
+    [
+      'wrappedPrivateKey as an ArrayBuffer',
+      'header.protection.wrappedPrivateKey',
+      (p) => ({ ...p, wrappedPrivateKey: p.wrappedPrivateKey.buffer }),
+    ],
+  ];
+
+  test.each(protectedCases)(
+    'a malformed protected header is corrupted and named, at list, generate, sign and state(): %s',
+    async (_, what, edit) => {
+      const { vault, scope, name, header, record } = await storedRecords();
+      const planted = plantedProtected(header);
+      await writeHeader(name, { ...planted, protection: edit(planted.protection) });
+
+      for (const run of [
+        () => scope.list(),
+        () => scope.generate('ed25519'),
+        () => scope.sign(keyRef(scope, record.id, 'ed25519'), message),
+        () => vault.state(),
+      ]) {
+        const error = await expectVaultError(run(), 'corrupted');
+        expect(error.message).toBe(`Corrupted storage: ${what}`);
+      }
+    },
+  );
 });
 
 // The key only gets a vault written; which type it is doesn't matter to these checks.

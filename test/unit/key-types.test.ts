@@ -2,12 +2,12 @@
 import { expect, test } from 'vitest';
 import { isWellFormedKeyTypeName, keyTypes } from '../../src/key-types.ts';
 
-// The core is every source file except the registry and the key-type modules, which alone may name a type.
-const core = import.meta.glob<string>(['../../src/**/*.ts', '!../../src/key-types.ts', '!../../src/key-types/**'], {
-  query: '?raw',
-  import: 'default',
-  eager: true,
-});
+// The core is every source file except the registry and the key-type modules, which alone may name a type, and
+// protection.ts, which names the unlock passkey (D-78): no key type, but the same word.
+const core = import.meta.glob<string>(
+  ['../../src/**/*.ts', '!../../src/key-types.ts', '!../../src/key-types/**', '!../../src/protection.ts'],
+  { query: '?raw', import: 'default', eager: true },
+);
 
 // The one test that reads code instead of behaviour: it keeps "a new key type is one module and one
 // registry entry" true. Comments count too, and case is ignored, so 'Ed25519' as a WebCrypto name is caught.

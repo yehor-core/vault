@@ -1,3 +1,5 @@
+import { equalBytes, type Bytes } from './bytes.ts';
+import { VaultError } from './errors.ts';
 import type { HeaderRecord } from './records.ts';
 
 /**
@@ -5,8 +7,30 @@ import type { HeaderRecord } from './records.ts';
  * or sent to another context (D-72).
  */
 export class Unlock {
-  /** The wrapping private key that opens the keys sealed to `header`. */
+  /** The unwrapped wrapping private key, with the wrapping public key of the header it belongs to (D-79). */
+  #held: { readonly wrappingPublicKey: Bytes; readonly privateKey: CryptoKey } | undefined;
+
+  /** Keeps `privateKey`, which opens the keys sealed to a protected header with `wrappingPublicKey`. */
+  hold(wrappingPublicKey: Bytes, privateKey: CryptoKey): void {
+    this.#held = { wrappingPublicKey, privateKey };
+  }
+
+  /** Whether this context opens the keys of the protected `header`. */
+  isUnlocked(header: HeaderRecord): boolean {
+    return this.#heldFor(header) !== undefined;
+  }
+
+  /** The wrapping private key that opens the keys sealed to `header`; `locked` if this context doesn't hold it. */
   wrappingPrivateKey(header: HeaderRecord): CryptoKey {
-    return header.protection.privateKey; // unprotected: the header holds it
+    if (header.protection.kind === 'none') return header.protection.privateKey; // unprotected: the header holds it
+    const held = this.#heldFor(header);
+    if (held === undefined) throw new VaultError('locked', 'The vault is locked');
+    return held.privateKey;
+  }
+
+  /** The held key, if it belongs to `header`. */
+  #heldFor(header: HeaderRecord): { readonly privateKey: CryptoKey } | undefined {
+    const held = this.#held;
+    return held && equalBytes(held.wrappingPublicKey, header.wrappingPublicKey) ? held : undefined;
   }
 }
