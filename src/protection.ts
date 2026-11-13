@@ -4,6 +4,7 @@ import { VaultError } from './errors.ts';
 import { creationOptions, isUserVerified, noUserVerification, prompt, readCreated } from './key-types/passkey.ts';
 import { assertOnlyFields, corrupted, readBytes, type Fields } from './readers.ts';
 import { IV_LENGTH, P256 } from './seal.ts';
+import type { ProtectionSupport } from './vault.ts';
 
 // Passkey protection (D-78, D-81). The one file besides the key types that names a passkey: the unlock passkey
 // is no key type, and the core reaches it only through this module.
@@ -50,11 +51,8 @@ export function parseUnlockProtection(protection: Fields): UnlockProtection {
   };
 }
 
-/**
- * D-75: `unsupported` when the page has no WebAuthn or the browser says it lacks PRF; else `unknown`, as a browser
- * that reports `extension:prf` true says nothing of the authenticator the user will pick. No prompt, no storage.
- */
-export async function protectionSupport(): Promise<'unsupported' | 'unknown'> {
+/** `Vault.protectionSupport()` (D-75): `extension:prf` true says nothing of the authenticator the user will pick. */
+export async function protectionSupport(): Promise<ProtectionSupport> {
   // Playwright's WebKit on Linux has a PublicKeyCredential that is no constructor, and no navigator.credentials
   if (typeof PublicKeyCredential !== 'function' || navigator.credentials === undefined) return 'unsupported';
   if (typeof PublicKeyCredential.getClientCapabilities !== 'function') return 'unknown';

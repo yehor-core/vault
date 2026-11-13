@@ -18,6 +18,9 @@ export interface OpenOptions {
  */
 export type VaultState = 'empty' | 'unprotected' | 'locked' | 'unlocked';
 
+/** What the page tells of protection before any prompt: never `supported` (D-75). */
+export type ProtectionSupport = 'unsupported' | 'unknown';
+
 /** A browser-native private-key store. Private keys never leave it; only signatures do. */
 export class Vault {
   readonly #connection: Connection;
@@ -42,7 +45,7 @@ export class Vault {
    * WebAuthn or the browser reports no PRF extension; otherwise `unknown`, and only `protect()` tells for sure (the
    * authenticator the user picks may still lack PRF). Never `supported`. Opens no vault and shows no prompt.
    */
-  static protectionSupport(): Promise<'unsupported' | 'unknown'> {
+  static protectionSupport(): Promise<ProtectionSupport> {
     return protectionSupport();
   }
 

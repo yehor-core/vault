@@ -319,7 +319,7 @@ A transaction ends once control returns to the event loop with no request pendin
 ```ts
 class Vault {
   static open(options?: { name?: string }): Promise<Vault>;
-  static protectionSupport(): Promise<'unsupported' | 'unknown'>;   // no prompt, no storage; never 'supported'
+  static protectionSupport(): Promise<ProtectionSupport>;          // no prompt, no storage; never 'supported'
   scope(name: string): Scope;                          // synchronous, no I/O
   state(): Promise<VaultState>;                        // reads storage, never prompts
   protect(): Promise<void>;                            // one prompt; this context is then unlocked
@@ -338,6 +338,7 @@ interface Scope {
   delete(key: KeyInfo): Promise<void>;                // missing key: no-op
 }
 type VaultState = 'empty' | 'unprotected' | 'locked' | 'unlocked';   // locked, unlocked: a protected vault in this context
+type ProtectionSupport = 'unsupported' | 'unknown';         // what the page tells before any prompt
 type KeyTypeName = 'ed25519' | 'secp256k1' | 'passkey';
 type AddableKeyTypeName = 'passkey';                 // the key types whose keys exist outside a vault
 // One member per key type, derived from the registry:

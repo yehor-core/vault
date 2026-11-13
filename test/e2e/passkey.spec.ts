@@ -1,3 +1,4 @@
+import type { ProtectionSupport } from '../../src/index.ts';
 import { expect, test, type Page } from '@playwright/test';
 import { DEMO_SCOPE, generate, keepVault, metaRecords, openDemo, protect, verifies, type PageKey } from './contexts.ts';
 import {
@@ -125,7 +126,7 @@ test('with an authenticator that returns no PRF result, protectionSupport is unk
 });
 
 /** `Vault.protectionSupport()` in the page. */
-async function protectionSupport(page: Page): Promise<string> {
+async function protectionSupport(page: Page): Promise<ProtectionSupport> {
   return page.evaluate(() => {
     // `as`: the global the dev demo sets; undefined fails the call below
     const { Vault } = globalThis as unknown as { Vault: typeof import('../../src/index.ts').Vault };
