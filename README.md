@@ -10,6 +10,19 @@ Live at https://yehor-core.github.io/vault/, over HTTPS, without cloning the rep
 
 Passkeys made on the Pages demo and on localhost are different credentials: their relying-party ids differ (`yehor-core.github.io` and `localhost`), so a passkey from one can't be added or used on the other.
 
+To sign with a passkey key in a fresh browser profile, follow the [walkthrough](#signing-in-a-fresh-browser-profile) below. The passkey checks done by hand in Firefox and Safari follow the checklist in [docs/manual-checks.md](docs/manual-checks.md).
+
+### Signing in a fresh browser profile
+
+1. Open https://yehor-core.github.io/vault/.
+2. Pick Key type `passkey`, click Generate key, and create the passkey on an authenticator that carries across profiles (below). A row of type `passkey` appears; note its public key.
+3. Click Sign in that row: Last signature ends with `verified   true`.
+4. Open a fresh browser profile (Chrome: profile menu → Add; Firefox: `about:profiles` → Create a New Profile; Safari: Settings → Profiles → New Profile) or another browser on the same machine, and open the demo there. State is `empty`: this profile has a vault of its own.
+5. Click Add existing passkey and pick the passkey from step 2 in both prompts: Vault needs two signatures to recover the public key. The row has the id, credential id and public key of step 2.
+6. Click Sign in that row: `verified   true`, checked under that public key outside Vault, so the added key is the key made in step 2.
+
+A passkey reaches a fresh profile only if its authenticator is there too. A security key (a YubiKey) works in every profile and browser it is plugged into. iCloud Keychain passkeys are the Mac's, so Safari profiles and Firefox on macOS see them. A passkey saved in one browser profile's own password manager (Google Password Manager in a Chrome profile, a password-manager extension) may stay in that profile, and then can't be added in another.
+
 ## Setup
 
 Requires Node.js ≥ 24 (developed on 26 LTS).
