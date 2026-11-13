@@ -9,7 +9,7 @@ const core = import.meta.glob<string>(
   { query: '?raw', import: 'default', eager: true },
 );
 
-// The one test that reads code instead of behaviour: it keeps "a new key type is one module and one
+// A test that reads code instead of behaviour (as do two in platform.test.ts): it keeps "a new key type is one module and one
 // registry entry" true. Comments count too, and case is ignored, so 'Ed25519' as a WebCrypto name is caught.
 test('no core file names a registered key type', () => {
   expect(Object.keys(core)).toEqual(expect.arrayContaining(['../../src/scope.ts', '../../src/records.ts']));
