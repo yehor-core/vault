@@ -4,7 +4,12 @@ import { Vault, type VaultErrorCode } from '../../src/index.ts';
 import { keyAad } from '../../src/key-types/sealed.ts';
 import { keyId, type KeyFields } from '../../src/records.ts';
 import { generateWrappingKey, importPublicKey, seal, unseal, type Cipher } from '../../src/seal.ts';
-import { addVirtualAuthenticator, hasVirtualAuthenticator, type VirtualAuthenticator } from './authenticator.ts';
+import {
+  addVirtualAuthenticator,
+  hasVirtualAuthenticator,
+  pickPasskey,
+  type VirtualAuthenticator,
+} from './authenticator.ts';
 import {
   cleanup,
   done,
@@ -13,6 +18,7 @@ import {
   flipBit,
   keyRef,
   keyTypeCases,
+  openContexts,
   openVault,
   rawRun,
   readAll,
@@ -498,6 +504,63 @@ const cases: TamperCase[] = [
 // Titled through %s: vitest cuts a $field value at 40 characters, which would drop the verdict.
 const tamperCases = cases.map((c) => [`${c.record} ${c.kind}, ${c.what}; ${verdict(c.detectedBy)}`, c] as const);
 
+// The protected header's rows (D-69): unlock comes last, after the operations a locked context runs without a secret.
+const PROTECTED_OPS = ['list', 'generate', 'unlock'] as const;
+type ProtectedOp = (typeof PROTECTED_OPS)[number];
+const protectedOpsBefore = (op: ProtectedOp) => PROTECTED_OPS.slice(0, PROTECTED_OPS.indexOf(op));
+
+interface ProtectedHeaderCase {
+  readonly what: string;
+  readonly detectedBy: ProtectedOp;
+  /** The header stored in place of `header`, and the passkey the user picks at unlock, if not the stored one. */
+  tamper(
+    header: any,
+    anotherUnlockPasskey: Uint8Array<ArrayBuffer>,
+  ): Promise<{ header: unknown; picks?: Uint8Array<ArrayBuffer> }>;
+}
+
+const protectionCase = (
+  what: string,
+  detectedBy: ProtectedOp,
+  edit: (protection: any) => unknown,
+): ProtectedHeaderCase => ({
+  what,
+  detectedBy,
+  tamper: async (h) => ({ header: { ...h, protection: edit(h.protection) } }),
+});
+
+const protectedCases: ProtectedHeaderCase[] = [
+  {
+    what: 'a wrapping public key of the writer',
+    detectedBy: 'unlock',
+    tamper: async (h) => ({ header: { ...h, wrappingPublicKey: (await writerKeyPair()).publicKey } }),
+  },
+  {
+    what: "the credential id of another vault's unlock passkey, which the user picks",
+    detectedBy: 'unlock',
+    tamper: async (h, another) => ({
+      header: { ...h, protection: { ...h.protection, credentialId: another } },
+      picks: another,
+    }),
+  },
+  protectionCase('a bit of the salt flipped', 'unlock', (p) => ({ ...p, salt: flipBit(p.salt) })),
+  protectionCase('a bit of the IV flipped', 'unlock', (p) => ({ ...p, iv: flipBit(p.iv) })),
+  protectionCase('a bit of the wrapped private key flipped', 'unlock', (p) => ({
+    ...p,
+    wrappedPrivateKey: flipBit(p.wrappedPrivateKey),
+  })),
+  protectionCase('the wrapped private key one byte short', 'unlock', (p) => ({
+    ...p,
+    wrappedPrivateKey: shorten(p.wrappedPrivateKey),
+  })),
+  protectionCase('the salt one byte short', 'list', (p) => ({ ...p, salt: shorten(p.salt) })),
+];
+const protectedHeaderCases = protectedCases.map((c) => {
+  const missed = protectedOpsBefore(c.detectedBy);
+  const verdict = `${missed.length ? `not detected by ${missed.join(' or ')}, ` : ''}corrupted at ${c.detectedBy}`;
+  return [`${c.what}; ${verdict}`, c] as const;
+});
+
 function verdict(detectedBy: Op): string {
   const missed = opsBefore(detectedBy);
   return missed.length === 0
@@ -677,6 +740,47 @@ describe.each(keyTypeCases)('$type', ({ type, signatureLength, invalidPublicKeys
         if (record === 'key record') {
           if (tampered.other) await expectVaultError(scope.sign(other, message), 'corrupted');
           else await expect(scope.sign(other, message)).resolves.toMatchObject({ type });
+        }
+      },
+    );
+  });
+
+  // Chromium only: unlock needs the CDP virtual authenticator's PRF result (D-80).
+  describe.runIf(hasVirtualAuthenticator)('tamper table, protected header', () => {
+    let authenticator: VirtualAuthenticator;
+    beforeEach(async () => {
+      authenticator = await addVirtualAuthenticator({ hasPrf: true });
+    });
+    afterEach(async () => {
+      vi.restoreAllMocks();
+      await authenticator.remove();
+    });
+
+    test.each(protectedHeaderCases)(
+      'a bad protected header is corrupted at the operation the table names: %s',
+      async (_, { tamper, detectedBy }) => {
+        const [first, second] = await openContexts();
+        const key = await first.scope.generate(type);
+        await first.vault.protect();
+        const { vault: another, name: anotherName } = await openVault();
+        await another.protect();
+        const header = await readHeader(first.name);
+        const anotherId: Uint8Array<ArrayBuffer> = (await readHeader(anotherName)).protection.credentialId;
+        const { header: tampered, picks } = await tamper(header, anotherId);
+        await writeHeader(first.name, tampered);
+
+        const run: Record<ProtectedOp, () => Promise<unknown>> = {
+          list: () => second.scope.list(),
+          generate: () => second.scope.generate(type),
+          unlock: () => (pickPasskey(picks ?? header.protection.credentialId), second.vault.unlock()),
+        };
+        for (const op of protectedOpsBefore(detectedBy)) await run[op](); // not detected: exempt from break-check
+        await expectVaultError(run[detectedBy](), 'corrupted');
+        if (detectedBy === 'unlock') {
+          // A failed unlock writes nothing and leaves the context locked (D-69).
+          expect(await readHeader(first.name)).toEqual(tampered);
+          expect(await second.vault.state()).toBe('locked');
+          await expectVaultError(second.scope.sign(key, message), 'locked');
         }
       },
     );

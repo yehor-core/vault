@@ -1,4 +1,5 @@
 /// <reference types="@vitest/browser-playwright" />
+import { vi } from 'vitest';
 import { cdp, server } from 'vitest/browser';
 
 /** Passkey unit tests need the CDP WebAuthn domain, which only Chromium has (D-62); Firefox and WebKit get e2e in test/e2e/passkey.spec.ts. */
@@ -71,4 +72,18 @@ export async function addVirtualAuthenticator(prf: PrfOptions = {}): Promise<Vir
       await session.send('WebAuthn.removeVirtualAuthenticator', { authenticatorId });
     },
   };
+}
+
+/**
+ * The user picks the passkey `credentialId` in the next discoverable prompt: the call is restricted to it, as the
+ * virtual authenticator has no picker. Restored by vi.restoreAllMocks.
+ */
+export function pickPasskey(credentialId: Uint8Array<ArrayBuffer>): void {
+  const original = CredentialsContainer.prototype.get; // not a spy already on navigator.credentials: one call, counted once
+  vi.spyOn(navigator.credentials, 'get').mockImplementationOnce(async (options?: CredentialRequestOptions) =>
+    original.call(navigator.credentials, {
+      ...options,
+      publicKey: { ...options?.publicKey, allowCredentials: [{ type: 'public-key', id: credentialId }] },
+    } as never),
+  );
 }

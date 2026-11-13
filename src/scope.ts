@@ -207,6 +207,7 @@ export class Scope {
       const value = await getKeyRecord(tx, this.#name, id);
       return { header, value };
     });
+    this.#unlock.observe(header); // D-79: also when the key is gone with the header
     if (value === undefined || !header) throw new VaultError('not-found', `No key ${id}`);
     const record = await parseKeyRecord(value);
     return { header, record, wrappingPrivateKey: () => this.#unlock.wrappingPrivateKey(header) };

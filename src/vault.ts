@@ -1,11 +1,11 @@
 import { Changes } from './changes.ts';
 import { closedError, Connection } from './connection.ts';
 import { protectVault } from './protect.ts';
-import { createUnlockPasskey } from './protection.ts';
+import { createUnlockPasskey, presentUnlockPasskey } from './protection.ts';
 import { isScopeName, MAX_SCOPE_NAME_LENGTH } from './records.ts';
 import { Scope } from './scope.ts';
 import { clearAll, KEYS_STORE, META_STORE, readHeader } from './storage.ts';
-import { Unlock } from './unlock.ts';
+import { Unlock, unlockVault } from './unlock.ts';
 
 export interface OpenOptions {
   /** IndexedDB database name. Default: `vault`. */
@@ -54,9 +54,10 @@ export class Vault {
    */
   async state(): Promise<VaultState> {
     const header = await this.#connection.transact([META_STORE, KEYS_STORE], 'readonly', readHeader);
+    const unlocked = this.#unlock.isUnlocked(header); // first: another header drops the key (D-79)
     if (!header) return 'empty';
     if (header.protection.kind === 'none') return 'unprotected';
-    return this.#unlock.isUnlocked(header) ? 'unlocked' : 'locked';
+    return unlocked ? 'unlocked' : 'locked';
   }
 
   /**
@@ -72,6 +73,27 @@ export class Vault {
     const secret = await pending;
     await protectVault(this.#connection, this.#unlock, secret);
     this.#changes.notify();
+  }
+
+  /**
+   * Unlocks this context with the vault's unlock credential: one discoverable prompt, started before any await. Every
+   * sealed key of every scope taken from this instance then signs without a prompt, until `lock()` or `close()`.
+   * Nothing is stored or sent to another context; each context unlocks on its own (D-72). Another credential, or a vault
+   * that is empty or unprotected when the prompt is answered, is `not-found`; a declined prompt `cancelled`; an answer
+   * without user verification or without a PRF result `unsupported`; an edited protected header `corrupted`. A failed
+   * unlock changes nothing. Calls no `onChange` listener.
+   */
+  async unlock(): Promise<void> {
+    if (this.#connection.closed) throw closedError(); // before the prompt: a closed vault prompts for nothing
+    const pending = presentUnlockPasskey(); // the prompt, before any await
+    const presented = await pending;
+    await unlockVault(this.#connection, this.#unlock, presented);
+  }
+
+  /** Locks this context: sealed keys fail `sign` with `locked` until `unlock()`. Other contexts are unaffected. */
+  lock(): void {
+    if (this.#connection.closed) throw closedError();
+    this.#unlock.lock();
   }
 
   /** Deletes every key of every scope and the vault itself, atomically. The vault is then empty, as if never used. */
@@ -90,8 +112,9 @@ export class Vault {
     return this.#changes.subscribe(listener);
   }
 
-  /** Releases the database connection. Every later call, and every call still in flight, of the vault and its scopes throws. */
+  /** Releases the database connection and locks this context. Every later call, and every call still in flight, of the vault and its scopes throws. */
   close(): void {
+    this.#unlock.lock();
     this.#connection.close();
     this.#changes.close();
   }
