@@ -54,10 +54,10 @@ export class Vault {
    */
   async state(): Promise<VaultState> {
     const header = await this.#connection.transact([META_STORE, KEYS_STORE], 'readonly', readHeader);
-    const unlocked = this.#unlock.isUnlocked(header); // first: another header drops the key (D-79)
+    this.#unlock.dropIfStale(header);
     if (!header) return 'empty';
     if (header.protection.kind === 'none') return 'unprotected';
-    return unlocked ? 'unlocked' : 'locked';
+    return this.#unlock.isUnlocked(header) ? 'unlocked' : 'locked';
   }
 
   /**

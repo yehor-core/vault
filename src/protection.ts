@@ -128,10 +128,9 @@ export async function protectWrappingKey(
  */
 export async function unwrapWrappingKey(
   secret: CryptoKey,
-  v: number,
-  wrappingPublicKey: Bytes,
-  protection: UnlockProtection,
+  header: { readonly v: number; readonly wrappingPublicKey: Bytes; readonly protection: UnlockProtection },
 ): Promise<CryptoKey> {
+  const { v, wrappingPublicKey, protection } = header;
   const { credentialId, salt, iv, wrappedPrivateKey } = protection;
   const kek = await deriveKek(secret, salt);
   const params: AesGcmParams = {
