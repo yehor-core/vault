@@ -56,7 +56,7 @@ Status: done · Spec: #64 · Tickets: #65, #66, #67, #68, #69, #70
 Not included: passkey as vault unlock (S6)
 
 ## S6: Passkey protection
-Status: planned · Spec: #- · Tickets: #-
+Status: in progress · Spec: #79 · Tickets: #80, #81, #82, #83, #84, #85, #86
 - PRF support detection
 - enable protection (atomic)
 - unlock, lock
