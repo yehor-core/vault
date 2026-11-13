@@ -10,18 +10,18 @@ Live at https://yehor-core.github.io/vault/, over HTTPS, without cloning the rep
 
 Passkeys made on the Pages demo and on localhost are different credentials: their relying-party ids differ (`yehor-core.github.io` and `localhost`), so a passkey from one can't be added or used on the other.
 
-To sign with a passkey key in a fresh browser profile, follow the [walkthrough](#signing-in-a-fresh-browser-profile) below. The passkey checks done by hand in Firefox and Safari follow the checklist in [docs/manual-checks.md](docs/manual-checks.md).
+To sign with a passkey key in a fresh browser profile, follow the [walkthrough](#signing-with-a-passkey-key-in-a-fresh-profile) below. The passkey checks done by hand in Firefox and Safari follow the checklist in [docs/manual-checks.md](docs/manual-checks.md).
 
-### Signing in a fresh browser profile
+### Signing with a passkey key in a fresh profile
 
 1. Open https://yehor-core.github.io/vault/.
-2. Pick Key type `passkey`, click Generate key, and create the passkey on an authenticator that carries across profiles (below). A row of type `passkey` appears; note its public key.
-3. Click Sign in that row: Last signature ends with `verified   true`.
-4. Open a fresh browser profile (Chrome: profile menu → Add; Firefox: `about:profiles` → Create a New Profile; Safari: Settings → Profiles → New Profile) or another browser on the same machine, and open the demo there. State is `empty`: this profile has a vault of its own.
-5. Click Add existing passkey and pick the passkey from step 2 in both prompts: Vault needs two signatures to recover the public key. The row has the id, credential id and public key of step 2.
-6. Click Sign in that row: `verified   true`, checked under that public key outside Vault, so the added key is the key made in step 2.
+2. Pick Key type `passkey`, click Generate key, and create the passkey on an authenticator that carries across profiles (below). A row of type `passkey` appears.
+3. Click that row's Sign: Last signature shows the key's full `public key` line and ends with `verified   true`.
+4. Open a fresh browser profile (Chrome: profile menu → Add; Firefox: `about:profiles` → Create a New Profile → Launch profile in new browser; Safari: Settings → Profiles → New Profile, then File → New Window in it) or another browser on the same machine, and open the demo there. State is `empty`: this profile has a vault of its own.
+5. Click Add existing passkey and pick the passkey from step 2 in both prompts: Vault needs two signatures to recover the public key. A row of type `passkey` appears with the id and credential id of step 2.
+6. Click that row's Sign: the `public key` line is the one of step 3 and the last line is `verified   true`, checked by the page under that public key with WebCrypto, without Vault (`demo/main.ts` `verifyAssertion`). So the added key is the key made in step 2, as `e2e › a passkey moved to a new browser context with an empty vault is added there with the same id and public key, then signs` checks in Chromium, Firefox and WebKit.
 
-A passkey reaches a fresh profile only if its authenticator is there too. A security key (a YubiKey) works in every profile and browser it is plugged into. iCloud Keychain passkeys are the Mac's, so Safari profiles and Firefox on macOS see them. A passkey saved in one browser profile's own password manager (Google Password Manager in a Chrome profile, a password-manager extension) may stay in that profile, and then can't be added in another.
+A passkey reaches a fresh profile only if its authenticator is there too. A security key (a YubiKey) works in every profile and browser it is plugged into. iCloud Keychain passkeys belong to the Mac, so Safari profiles, Firefox and Chrome on macOS can all use them. A passkey saved in one browser profile's own password manager (Google Password Manager in a Chrome profile, a password-manager extension) may stay in that profile, and then can't be added in another.
 
 ## Setup
 

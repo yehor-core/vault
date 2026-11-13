@@ -513,7 +513,8 @@ Where `protect()` takes a second prompt: the browser returns the PRF result at c
 | Chromium on Windows | Through webauthn.dll | only with WebAuthn API v8; which Windows build ships it: unconfirmed | one or two, unconfirmed |
 | Firefox on Linux, and on macOS below 26.4 with security keys | Security key (authenticator-rs) | never | two |
 | Firefox on Windows, and on macOS with platform passkeys | Through the OS WebAuthn API | unconfirmed | one or two, unconfirmed |
-| Safari 26.4+ on macOS | Security key | yes, by WebKit's release notes; but 26.4 returned the still-encrypted `hmac-secret` output, and which shipping Safari has the fix: unconfirmed | one; whether it then unlocks: unconfirmed |
+| Safari 26.4+ on macOS | Security key with CTAP `prf`, or `hmac-secret` with `hmac-secret-mc` | yes, by WebKit's release notes; but 26.4 returned the still-encrypted `hmac-secret` output, and which shipping Safari has the fix: unconfirmed | one; whether it then unlocks: unconfirmed |
+| Safari 26.4+ on macOS | Security key with `hmac-secret` only (YubiKey firmware 5.2–5.7) | no: without `hmac-secret-mc` the key computes no secret at creation | two; whether it then unlocks: unconfirmed |
 | Safari on iOS | Security key (YubiKey) | reportedly no PRF at all: unconfirmed | one, then `unsupported`, unconfirmed |
 | Safari 18+ | iCloud Keychain | passed through if AuthenticationServices returns it: unconfirmed | one or two, unconfirmed |
 | Chrome, Firefox on Android | The provider behind Credential Manager | unconfirmed | one or two, unconfirmed |

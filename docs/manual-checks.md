@@ -29,7 +29,7 @@ Then macOS is updated to a version that offers Safari 26.4 or later, and Safari 
 5. Safari × iCloud Keychain
 6. Safari × YubiKey
 
-The Firefox pairs run before the macOS update: below macOS 26.4, Firefox reaches security keys through authenticator-rs, and that is the path these runs record.
+Firefox is 139 or later: 135–138 have no PRF on macOS. The Firefox pairs run before the macOS update: below macOS 26.4, Firefox reaches security keys through authenticator-rs, and that is the path these runs record.
 
 The YubiKey has firmware 5.4.3 and a FIDO2 PIN set. Firmware 5.4.3 has `hmac-secret` but no `hmac-secret-mc`, so it returns no PRF result at creation in any browser.
 
@@ -46,7 +46,7 @@ The YubiKey has firmware 5.4.3 and a FIDO2 PIN set. Firmware 5.4.3 has `hmac-sec
 | 7. Reload: locked | 0 | skipped | 0 | 0 | 0 |
 | 8. Unlock | 1 | skipped | 1 | 1 | 1 |
 | 9. Lock | 0 | skipped | 0 | 0 | 0 |
-| 10. Sealed sign while locked | 0 | skipped | 0 | 0 | 0 |
+| 10. Sign with a sealed key while locked | 0 | skipped | 0 | 0 | 0 |
 | 11. Cancelled prompt | 1 | 1 | 1 | 1 | 1 |
 | 12. Wipe | 0 | 0 | 0 | 0 | 0 |
 
@@ -63,19 +63,19 @@ In each prompt, pick the pair's authenticator: iCloud Keychain, or the security 
 | Step | Do | Expected |
 |---|---|---|
 | 1. Generate a passkey key | Key type `passkey`, Label `run N key`, Generate key | A row of type `passkey` with a credential id; State `unprotected`; status `Ready` |
-| 2. Sign with it | Sign in that row | The dialog lists `run N key`; Last signature shows `authenticator data`, `client data` and `verified   true` |
-| 3. Add it in a fresh profile | Open a fresh profile (Safari: Settings → Profiles → New Profile, then File → New Window in it; Firefox: `about:profiles` → Create a New Profile → Launch profile in new browser) and the demo in it; State is `empty`. Label `run N key`, Add existing passkey, pick `run N key` both times | A row of type `passkey` whose id, credential id and public key are the ones of step 1; State `unprotected` |
-| 4. Sign there | Sign in that row | `verified   true`; the `public key` line is the one of step 2 |
-| 5. Generate an ed25519 key and sign | Back in the first profile: Key type `ed25519`, Generate key, then Sign in its row | No prompt; `verified   true` |
+| 2. Sign with it | That row's Sign | The dialog lists `run N key`; Last signature shows the full `public key` line, `authenticator data`, `client data` and `verified   true` |
+| 3. Add it in a fresh profile | Open a fresh profile (README, walkthrough step 4) and the demo in it; State is `empty`. Label `run N key`, Add existing passkey, pick `run N key` both times | A row of type `passkey` whose id and credential id are the ones of step 1; State `unprotected` |
+| 4. Sign there | That row's Sign | `verified   true`; the `public key` line is the one of step 2 |
+| 5. Generate an ed25519 key and sign | Back in the first profile: Key type `ed25519`, Generate key, then its row's Sign | No prompt; `verified   true` |
 | 6. Protect | Protect with a passkey | State `unlocked`, status `Ready`, both keys still listed; Sign of the ed25519 key: no prompt, `verified   true`. Safari 18.6 × YubiKey: status `VaultError unsupported: …`, State `unprotected`, both keys listed, and the ed25519 key still signs |
 | 7. Reload: locked | Reload the page | State `locked`; both keys listed |
-| 8. Unlock | Unlock, pick `Vault unlock` | State `unlocked`; Sign of the ed25519 key: no prompt, `verified   true` |
+| 8. Unlock | Unlock, pick the unlock passkey (`Vault unlock` in the dialog) | State `unlocked`; Sign of the ed25519 key: no prompt, `verified   true` |
 | 9. Lock | Lock | State `locked`, no prompt |
-| 10. Sealed sign while locked | Sign in the ed25519 row | No prompt; status `VaultError locked: …`; Last signature unchanged; State `locked` |
-| 11. Cancelled prompt | Unlock, then cancel the dialog. Safari 18.6 × YubiKey (vault not protected): Sign in the passkey row, then cancel | Status `VaultError cancelled: …`; State as before (`locked`; `unprotected` for Safari 18.6 × YubiKey); both keys listed |
+| 10. Sign with a sealed key while locked | The ed25519 row's Sign | No prompt; status `VaultError locked: …`; Last signature unchanged; State `locked` |
+| 11. Cancelled prompt | Unlock, then cancel the dialog. Safari 18.6 × YubiKey (vault not protected): the passkey row's Sign, then cancel | Status `VaultError cancelled: …`; State as before (`locked`; `unprotected` for Safari 18.6 × YubiKey); both keys listed |
 | 12. Wipe | Wipe vault, in the first profile and in the fresh one; then delete the fresh profile | No prompt; State `empty`; no keys |
 
-After the run: clear the authenticator as in step 0. `wipe()` removes nothing at the authenticator: the passkey key and the `Vault unlock` passkey stay on it, and a failed `protect()` leaves its `Vault unlock` passkey there too. The YubiKey holds 25 discoverable credentials (firmware below 5.7) and each run adds two.
+After the run: clear the authenticator as in step 0. `wipe()` removes nothing at the authenticator: the passkey key and the unlock passkey stay on it, and a failed `protect()` leaves its unlock passkey there too. The YubiKey holds 25 discoverable credentials (firmware below 5.7) and each run adds two.
 
 ## On a failure
 
