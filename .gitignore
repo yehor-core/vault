@@ -7,6 +7,9 @@ node_modules/
 # Library build output (npm run build)
 dist/
 
+# Published demo build (npm run build:demo), deployed to GitHub Pages
+demo-dist/
+
 # Test artifacts (Playwright results, Vitest failure screenshots)
 test-results/
 .vitest/

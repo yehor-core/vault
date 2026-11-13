@@ -1,12 +1,12 @@
 import { expect, type Browser, type BrowserContext, type CDPSession, type Page } from '@playwright/test';
 import { createHash, createPrivateKey, createPublicKey, verify } from 'node:crypto';
 import type { VaultErrorCode } from '../../src/index.ts';
-import { DEMO_SCOPE, openDemo, type PageKey } from './contexts.ts';
+import { DEMO_SCOPE, fromHex, openDemo, type PageKey } from './contexts.ts';
 
 // Passkey authenticators for e2e tests (D-62): Chromium's own WebAuthn through a CDP virtual authenticator; in
 // Firefox and WebKit, Playwright's JavaScript stand-in, which always signs ES256 with UP and UV.
 
-/** The relying-party id of the dev demo's origin (`playwright.config.ts`). */
+/** The relying-party id of the demo's origins, dev and published build (`playwright.config.ts`). */
 const RP_ID = 'localhost';
 
 /** A passkey as it leaves one authenticator for another, base64url throughout: the private key is PKCS#8. */
@@ -30,15 +30,16 @@ export interface VirtualAuthenticator extends PasskeyAuthenticator {
   answerWithoutUserVerification(): Promise<void>;
 }
 
-/** A browser context with an authenticator and a page of the dev demo, its `Vault` global ready. */
+/** A browser context with an authenticator and a page of the demo at the test's `baseURL` (see `openDemo`). */
 export interface PasskeyDevice {
   readonly page: Page;
   readonly authenticator: PasskeyAuthenticator;
 }
 
 /**
- * A new page of the dev demo in `context`, with an authenticator for the engine that holds `passkeys`. Once per
- * context: the Chromium authenticator belongs to this page, and the stand-in is installed into the context.
+ * A new page of the demo at the test's `baseURL` in `context`, with an authenticator for the engine that holds
+ * `passkeys`. Once per context: the Chromium authenticator belongs to this page, and the stand-in is installed into
+ * the context.
  */
 export async function openWithAuthenticator(
   context: BrowserContext,
@@ -180,6 +181,17 @@ export interface PageAssertion {
   readonly authenticatorData: number[];
   readonly clientDataJSON: number[];
   readonly signature: number[];
+}
+
+/** The assertion the demo shows in #output after signing with a passkey key. */
+export async function shownAssertion(page: Page): Promise<PageAssertion> {
+  const output = page.locator('#output');
+  const bytes = async (name: string) => Array.from(fromHex(await output.getAttribute(name)));
+  return {
+    authenticatorData: await bytes('data-authenticator-data'),
+    clientDataJSON: await bytes('data-client-data-json'),
+    signature: await bytes('data-signature'),
+  };
 }
 
 // The page functions below rethrow a VaultError as `VaultError <code>: …`: page.evaluate keeps only the message.

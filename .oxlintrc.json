@@ -5,5 +5,5 @@
   "rules": {
     "typescript/no-non-null-assertion": "error"
   },
-  "ignorePatterns": ["dist/", "node_modules/", ".vitest/"]
+  "ignorePatterns": ["dist/", "demo-dist/", "node_modules/", ".vitest/"]
 }

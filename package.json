@@ -15,6 +15,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "demo": "vite demo",
+    "build:demo": "vite build demo --base /vault/ --outDir ../demo-dist --emptyOutDir",
+    "preview:demo": "vite preview demo --base /vault/ --outDir ../demo-dist",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.node.json",
     "check:refs": "node scripts/check-test-refs.ts",
     "check:decisions": "node scripts/check-decisions.ts",
