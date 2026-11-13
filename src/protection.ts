@@ -1,5 +1,5 @@
 import { sha256 } from '@noble/hashes/sha2.js';
-import { encode, type Bytes } from './bytes.ts';
+import { encode, equalBytes, type Bytes } from './bytes.ts';
 import { VaultError } from './errors.ts';
 import { creationOptions, isUserVerified, noUserVerification, prompt, readCreated } from './key-types/passkey.ts';
 import { assertOnlyFields, corrupted, readBytes, type Fields } from './readers.ts';
@@ -61,26 +61,14 @@ export interface PresentedUnlock {
  * Which passkey answered is checked by the caller, against the header it reads afterwards.
  */
 export async function presentUnlockPasskey(): Promise<PresentedUnlock> {
-  const publicKey: PublicKeyCredentialRequestOptions = {
-    challenge: crypto.getRandomValues(new Uint8Array(UNLOCK_CHALLENGE_LENGTH)),
-    userVerification: 'required',
-    extensions: { prf: { eval: { first: PRF_INPUT } } },
-  };
-  const pending = navigator.credentials.get({ publicKey }); // the prompt, before any await
-  const credential = await prompt(pending);
-  if (!(credential instanceof PublicKeyCredential) || !(credential.response instanceof AuthenticatorAssertionResponse))
-    throw new VaultError('unavailable', 'The browser returned no passkey assertion');
-  const credentialId = new Uint8Array(credential.rawId);
-  if (!isUserVerified(new Uint8Array(credential.response.authenticatorData)))
-    throw noUserVerification('The presented passkey');
-  const result = credential.getClientExtensionResults().prf?.results?.first;
+  const { credentialId, result } = await assertUnlock();
   const secret = result === undefined ? undefined : await importSecret(result);
   return { credentialId, secret };
 }
 
 /**
- * Creates the unlock passkey, with its prompt started before any await, and returns its PRF result. An
- * authenticator that returns none at creation is `unsupported`.
+ * Creates the unlock passkey, with its prompt started before any await, and returns its PRF result (D-74). The second
+ * prompt follows the creation with no other await, so it runs in the same user activation.
  */
 export async function createUnlockPasskey(): Promise<UnlockSecret> {
   const publicKey = {
@@ -90,11 +78,38 @@ export async function createUnlockPasskey(): Promise<UnlockSecret> {
   const pending = navigator.credentials.create({ publicKey }); // the prompt, before any await
   const credential = await prompt(pending);
   const { credentialId } = readCreated(credential);
-  const outputs = credential instanceof PublicKeyCredential ? credential.getClientExtensionResults() : {};
-  const result = outputs.prf?.results?.first;
+  const prf = credential instanceof PublicKeyCredential ? credential.getClientExtensionResults().prf : undefined;
+  let result = prf?.results?.first;
+  if (result === undefined && prf?.enabled === true) {
+    const second = await assertUnlock(credentialId);
+    if (!equalBytes(second.credentialId, credentialId))
+      throw new VaultError('unavailable', 'The second prompt was answered by another passkey');
+    result = second.result;
+  }
   if (result === undefined) throw new VaultError('unsupported', 'The authenticator returned no PRF result');
   const secret = await importSecret(result);
   return { credentialId, secret };
+}
+
+/**
+ * A prompt for an unlock passkey, started before any await: discoverable, or restricted to `credentialId`. User
+ * verification is required and checked: without it, an `hmac-secret` authenticator returns another PRF result.
+ */
+async function assertUnlock(credentialId?: Bytes): Promise<{ credentialId: Bytes; result: BufferSource | undefined }> {
+  const publicKey: PublicKeyCredentialRequestOptions = {
+    challenge: crypto.getRandomValues(new Uint8Array(UNLOCK_CHALLENGE_LENGTH)),
+    ...(credentialId && { allowCredentials: [{ type: 'public-key', id: credentialId }] }),
+    userVerification: 'required',
+    extensions: { prf: { eval: { first: PRF_INPUT } } },
+  };
+  const pending = navigator.credentials.get({ publicKey }); // the prompt, before any await
+  const credential = await prompt(pending);
+  if (!(credential instanceof PublicKeyCredential) || !(credential.response instanceof AuthenticatorAssertionResponse))
+    throw new VaultError('unavailable', 'The browser returned no passkey assertion');
+  if (!isUserVerified(new Uint8Array(credential.response.authenticatorData)))
+    throw noUserVerification('The presented passkey');
+  const result = credential.getClientExtensionResults().prf?.results?.first;
+  return { credentialId: new Uint8Array(credential.rawId), result };
 }
 
 /**

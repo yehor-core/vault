@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { Vault } from '../../src/index.ts';
+import { Vault, type Scope } from '../../src/index.ts';
 import {
   addVirtualAuthenticator,
   hasVirtualAuthenticator,
@@ -273,7 +273,7 @@ describe.runIf(hasVirtualAuthenticator)('protect, failing', () => {
     await cleanup();
   });
 
-  test('an authenticator without PRF makes protect fail with unsupported, and the vault is unchanged', async () => {
+  test('an authenticator without PRF makes protect fail with unsupported after one prompt, and the vault is unchanged', async () => {
     authenticator = await addVirtualAuthenticator();
     const [first, second] = await openContexts();
     await first.scope.generate('ed25519');
@@ -281,9 +281,11 @@ describe.runIf(hasVirtualAuthenticator)('protect, failing', () => {
     const notified = [vi.fn(), vi.fn()];
     first.vault.onChange(notified[0] ?? vi.fn());
     second.vault.onChange(notified[1] ?? vi.fn());
+    const get = vi.spyOn(navigator.credentials, 'get');
 
     await expectVaultError(first.vault.protect(), 'unsupported');
 
+    expect(get).not.toHaveBeenCalled(); // PRF not enabled at creation: no second prompt (D-74)
     expect(await readAll(first.name)).toEqual(before);
     expect(await first.vault.state()).toBe('unprotected');
     await new Promise((resolve) => setTimeout(resolve, 50)); // a notification would have crossed by now
@@ -302,6 +304,139 @@ describe.runIf(hasVirtualAuthenticator)('protect, failing', () => {
 
     expect(await readAll(name)).toEqual(before);
   });
+});
+
+// Chromium only, as above (D-80): `hasHmacSecret` without `hasHmacSecretMc` returns PRF results at assertion only,
+// as Firefox does with every authenticator and Chromium with such security keys (docs/research/webauthn-prf.md §2, §6).
+describe.runIf(hasVirtualAuthenticator)('protect, with no PRF result at creation', () => {
+  beforeEach(async () => {
+    authenticator = await addVirtualAuthenticator({ hasHmacSecret: true });
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await authenticator.remove();
+    await cleanup();
+  });
+
+  describe.each(keyTypeCases)('$type', ({ type, verify }) => {
+    test('protect shows a second prompt for the new passkey only, user verification required, with the fixed PRF input; then every key signs', async () => {
+      const { vault, scope, name } = await openVault();
+      const key = asSealed(await scope.generate(type));
+      const passkeyKey = await scope.generate('passkey');
+      const create = vi.spyOn(navigator.credentials, 'create');
+      const get = vi.spyOn(navigator.credentials, 'get');
+
+      await vault.protect();
+
+      expect(create).toHaveBeenCalledTimes(1);
+      expect(get).toHaveBeenCalledTimes(1);
+      const credentialId = await unlockPasskeyId(name);
+      const options = get.mock.calls[0]?.[0]?.publicKey;
+      expect(options).toMatchObject({
+        allowCredentials: [{ type: 'public-key', id: credentialId }],
+        userVerification: 'required',
+        extensions: { prf: { eval: { first: UNLOCK_PRF_INPUT } } },
+      });
+      expect(options?.challenge).toHaveProperty('byteLength', 32);
+      expect(await vault.state()).toBe('unlocked');
+      const { bytes } = await scope.sign(key, message);
+      expect(await verify(key.publicKey, bytes, message)).toBe(true);
+      expect(get).toHaveBeenCalledTimes(1); // sealed sign: no prompt
+      await expect(scope.sign(passkeyKey, message)).resolves.toMatchObject({ type: 'passkey' });
+    });
+  });
+
+  test('the second prompt starts before any task runs once the creation is answered', async () => {
+    const { vault, scope } = await openVault();
+    await scope.generate('ed25519'); // a header and a key: work protect could start before the second prompt
+    const get = vi.spyOn(navigator.credentials, 'get');
+    const startedBeforeAnyTask = Promise.withResolvers<boolean>();
+    afterCreation(() => {
+      // No task runs while microtasks are queued: this chain, re-queued until get() is called, holds back every
+      // answer that comes in a task (IndexedDB, timers), so awaiting one before the second prompt ends it with false.
+      let hops = 0;
+      const spin = () => {
+        if (get.mock.calls.length > 0) startedBeforeAnyTask.resolve(true);
+        else if (++hops < 1000) queueMicrotask(spin);
+        else startedBeforeAnyTask.resolve(false);
+      };
+      queueMicrotask(spin);
+    });
+
+    await vault.protect();
+
+    expect(await startedBeforeAnyTask.promise).toBe(true);
+  });
+
+  test('a vault protected after two prompts unlocks in another instance with one prompt', async () => {
+    const [first, second] = await openContexts();
+    const key = asSealed(await first.scope.generate('secp256k1')); // any sealed type: it shows the unlock works
+    await first.vault.protect();
+    const get = vi.spyOn(navigator.credentials, 'get');
+
+    await second.vault.unlock();
+
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(await second.vault.state()).toBe('unlocked');
+    await expect(second.scope.sign(key, message)).resolves.toMatchObject({ type: 'secp256k1' });
+  });
+
+  /** Each failure of the second prompt, set up on a vault whose `scope` the test then protects. */
+  const secondPromptFailures = [
+    {
+      failure: 'a declined second prompt',
+      code: 'cancelled',
+      setUp: async () => {
+        afterCreation(() => authenticator.setPresence(false)); // the creation is answered, the second prompt not
+        shortGetTimeout();
+      },
+    },
+    {
+      failure: 'a second assertion without a PRF result',
+      code: 'unsupported',
+      setUp: async () => {
+        vi.spyOn(PublicKeyCredential.prototype, 'getClientExtensionResults').mockReturnValue({
+          prf: { enabled: true },
+        });
+      },
+    },
+    {
+      failure: 'a second assertion without UV',
+      code: 'unsupported',
+      setUp: () => authenticator.overrideResponses({ isBadUV: true }),
+    },
+    {
+      failure: 'a second assertion by another passkey',
+      code: 'unavailable',
+      setUp: async (scope: Scope) => pickPasskey((await scope.generate('passkey')).credentialId),
+    },
+  ] as const;
+
+  test.each(secondPromptFailures)(
+    'protect with $failure fails with $code after two prompts, and the vault is unchanged',
+    async ({ code, setUp }) => {
+      const [first, second] = await openContexts();
+      const key = asSealed(await first.scope.generate('ed25519')); // any sealed type: it shows the vault unchanged
+      const create = vi.spyOn(navigator.credentials, 'create');
+      const get = vi.spyOn(navigator.credentials, 'get');
+      await setUp(first.scope);
+      const calls = [create.mock.calls.length, get.mock.calls.length];
+      const before = await readAll(first.name);
+      const notified = [vi.fn(), vi.fn()];
+      first.vault.onChange(notified[0] ?? vi.fn());
+      second.vault.onChange(notified[1] ?? vi.fn());
+
+      await expectVaultError(first.vault.protect(), code);
+
+      expect([create.mock.calls.length, get.mock.calls.length]).toEqual([(calls[0] ?? 0) + 1, (calls[1] ?? 0) + 1]);
+      expect(await readAll(first.name)).toEqual(before);
+      expect(await first.vault.state()).toBe('unprotected');
+      await expect(first.scope.sign(key, message)).resolves.toMatchObject({ type: 'ed25519' });
+      await settle();
+      expect(notified.map((listener) => listener.mock.calls.length)).toEqual([0, 0]);
+    },
+  );
 });
 
 // Chromium only, as above (D-80): protect needs the virtual authenticator's PRF result.
@@ -402,6 +537,16 @@ function shortGetTimeout() {
 
 /** What sign of a key sealed to the replaced header fails with, under each replacement. */
 const SIGN_ERROR_UNDER = { locked: 'locked', unprotected: 'corrupted', empty: 'not-found' } as const;
+
+/** Runs `hook` once the next `create` prompt is answered, before Vault sees the answer. */
+function afterCreation(hook: () => unknown) {
+  const original = CredentialsContainer.prototype.create;
+  vi.spyOn(navigator.credentials, 'create').mockImplementationOnce(async (options?: CredentialCreationOptions) => {
+    const credential = await original.call(navigator.credentials, options);
+    await hook();
+    return credential;
+  });
+}
 
 /** Wait long enough for a notification to cross to another instance. */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
