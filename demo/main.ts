@@ -16,6 +16,7 @@ function element<T extends HTMLElement>(id: string, type: new () => T): T {
 }
 
 const status = element('status', HTMLElement);
+const state = element('state', HTMLElement);
 const rows = element('keys', HTMLElement);
 const output = element('output', HTMLElement);
 const messageInput = element('message', HTMLInputElement);
@@ -42,7 +43,9 @@ function show(error: unknown) {
 }
 
 async function refresh() {
-  rows.replaceChildren(...(await keys.list()).map(row));
+  const [listed, current] = await Promise.all([keys.list(), vault.state()]);
+  rows.replaceChildren(...listed.map(row));
+  state.textContent = current;
 }
 
 function row(key: KeyInfo): HTMLTableRowElement {
@@ -182,9 +185,23 @@ element('add', HTMLElement).onclick = () =>
   run(async () => {
     await keys.add('passkey', labelOption()); // first: its prompt starts inside the click
   });
+element('protect', HTMLElement).onclick = () =>
+  run(async () => {
+    await vault.protect(); // first: its prompt starts inside the click
+  });
+element('unlock', HTMLElement).onclick = () =>
+  run(async () => {
+    await vault.unlock(); // first: its prompt starts inside the click
+  });
+element('lock', HTMLElement).onclick = () =>
+  run(async () => {
+    vault.lock();
+  });
 element('wipe', HTMLElement).onclick = () =>
   run(async () => {
     await vault.wipe();
     output.textContent = '—';
   });
+// Another tab wrote: show what is stored now. An error goes to the status line; a shown error stays.
+vault.onChange(() => void refresh().catch(show));
 await run(async () => {});
