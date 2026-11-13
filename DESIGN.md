@@ -292,8 +292,9 @@ How the types prevent misuse: every key operation is a method of a `Scope`, so a
 import { Vault, VaultError } from 'vault';
 
 const vault = await Vault.open();
-// Expecting a protected vault? An evicted one is 'empty', and generate would create an unprotected one: check first.
-if ((await vault.state()) === 'empty') { /* tell the user the vault was reset */ }
+// This app protected its vault before? Then 'empty' (or 'unprotected') means it was evicted, wiped or replaced, and
+// generate would create an unprotected one: check first. A first run is 'empty' too; only the app knows which it expects.
+if (protectedBefore && (await vault.state()) !== 'locked') { /* tell the user the vault was reset */ }
 const keys = vault.scope('https://app.example');       // a group of keys; no I/O
 const key = await keys.generate('ed25519', { label: 'Payments' });   // { id, scope, type, publicKey, createdAt, label }
 const list = await keys.list();                        // this scope's keys only

@@ -321,6 +321,7 @@ describe.each(keyTypeCases)('$type', ({ type, publicKeyLength, signatureLength, 
     test('state() is empty for a never-used, wiped or deleted vault and unprotected after the first generate', async () => {
       const { vault, scope, name } = await openVault();
       expect(await vault.state()).toBe('empty');
+      expect(await readAll(name)).toEqual({ meta: [], keys: [] });
 
       await scope.generate(type);
       expect(await vault.state()).toBe('unprotected');
