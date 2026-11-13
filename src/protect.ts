@@ -27,23 +27,24 @@ import type { Unlock } from './unlock.ts';
 export async function protectVault(connection: Connection, unlock: Unlock, secret: UnlockSecret): Promise<void> {
   const written = await untilUnchanged(MAX_ATTEMPTS, () => tryProtect(connection, unlock, secret));
   if (!written) throw new VaultError('unavailable', 'The vault kept changing during protect');
-  unlock.hold(written.wrappingPublicKey, written.privateKey);
+  unlock.hold(written.header, written.privateKey);
 }
 
 /**
- * One attempt: read, re-seal, write. The protected header's wrapping public key and its private key, unwrapped, once
+ * One attempt: read, re-seal, write. The protected header and its wrapping private key, unwrapped, once
  * written; undefined if the vault changed since it was read; `protected` if it is protected by then.
  */
 async function tryProtect(
   connection: Connection,
   unlock: Unlock,
   secret: UnlockSecret,
-): Promise<{ wrappingPublicKey: Bytes; privateKey: CryptoKey } | undefined> {
+): Promise<{ header: HeaderRecord; privateKey: CryptoKey } | undefined> {
   const read = await connection.transact([META_STORE, KEYS_STORE], 'readonly', async (tx) => {
     const header = await readHeader(tx);
     const records = await listAllKeyRecords(tx);
     return { header, ...records };
   });
+  unlock.see(read.header);
   if (read.header && read.header.protection.kind !== 'none') throw protectedError();
   const records = await Promise.all(read.values.map(parseKeyRecord));
 
@@ -67,7 +68,7 @@ async function tryProtect(
   });
   if (outcome === 'protected') throw protectedError();
   if (outcome === 'changed') return undefined;
-  return { wrappingPublicKey: header.wrappingPublicKey, privateKey: protectedKey.privateKey };
+  return { header, privateKey: protectedKey.privateKey };
 }
 
 /** The records whose part depends on the header, sealed to `wrappingPublicKey`; the others stay as they are. */

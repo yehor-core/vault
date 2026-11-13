@@ -772,7 +772,11 @@ describe.each(keyTypeCases)('$type', ({ type, signatureLength, invalidPublicKeys
         const run: Record<ProtectedOp, () => Promise<unknown>> = {
           list: () => second.scope.list(),
           generate: () => second.scope.generate(type),
-          unlock: () => (pickPasskey(picks ?? header.protection.credentialId), second.vault.unlock()),
+          unlock: async () => {
+            await second.vault.state(); // an application shows Unlock after reading the state (D-94)
+            pickPasskey(picks ?? header.protection.credentialId);
+            return second.vault.unlock();
+          },
         };
         for (const op of protectedOpsBefore(detectedBy)) await run[op](); // not detected: exempt from break-check
         await expectVaultError(run[detectedBy](), 'corrupted');

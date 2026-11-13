@@ -1,7 +1,7 @@
 import { equalBytes, type Bytes } from './bytes.ts';
 import type { Connection } from './connection.ts';
 import { VaultError } from './errors.ts';
-import { UNLOCK_KIND, unwrapWrappingKey, type PresentedUnlock } from './protection.ts';
+import { presentUnlockPasskey, UNLOCK_KIND, unwrapWrappingKey, type PresentedUnlock } from './protection.ts';
 import type { HeaderRecord } from './records.ts';
 import { KEYS_STORE, META_STORE, readHeader } from './storage.ts';
 
@@ -12,10 +12,18 @@ import { KEYS_STORE, META_STORE, readHeader } from './storage.ts';
 export class Unlock {
   /** The unwrapped wrapping private key, with the wrapping public key of the header it belongs to (D-79). */
   #held: { readonly wrappingPublicKey: Bytes; readonly privateKey: CryptoKey } | undefined;
+  /** The unlock credential named by the last header this context read or wrote (D-94). */
+  #credentialId: Bytes | undefined;
 
-  /** Keeps `privateKey`, which opens the keys sealed to a protected header with `wrappingPublicKey`. */
-  hold(wrappingPublicKey: Bytes, privateKey: CryptoKey): void {
-    this.#held = { wrappingPublicKey, privateKey };
+  /** The unlock credential's credential id as of this context's last header read or write; undefined if none was named. */
+  get credentialId(): Bytes | undefined {
+    return this.#credentialId;
+  }
+
+  /** Keeps `privateKey`, which opens the keys sealed to `header`, a protected header this context read or wrote. */
+  hold(header: HeaderRecord, privateKey: CryptoKey): void {
+    this.see(header);
+    this.#held = { wrappingPublicKey: header.wrappingPublicKey, privateKey };
   }
 
   /** Forgets the held key: this context is locked. */
@@ -24,11 +32,18 @@ export class Unlock {
   }
 
   /**
-   * Drops the held key if the stored `header`, or its absence, is not the one it belongs to: another context wiped,
-   * or wiped and protected again, since (D-79). Call with every header read for `state()` or `sign`.
+   * Takes in the stored `header`, or its absence (undefined: the vault is empty); call with every header read or
+   * write. Keeps the unlock credential it names (D-94), and drops the held key if the header is not the one it belongs
+   * to: another context wiped, or wiped and protected again, since (D-79).
    */
-  dropIfStale(header: HeaderRecord | undefined): void {
+  see(header: HeaderRecord | undefined): void {
+    this.#credentialId = header?.protection.kind === UNLOCK_KIND ? header.protection.credentialId : undefined;
     if (this.#heldFor(header) === undefined) this.#held = undefined;
+  }
+
+  /** Forgets the unlock credential: the last header read failed. */
+  forgetCredential(): void {
+    this.#credentialId = undefined;
   }
 
   /** Whether this context opens the keys of the stored `header` (undefined: the vault is empty) with a held key. */
@@ -52,12 +67,42 @@ export class Unlock {
 }
 
 /**
- * Unlocks this context with the credential the user presented, once its prompt is answered (D-73, D-77): reads the
- * header, checks the credential is the unlock credential it names, unwraps the wrapping private key and holds it. Every
- * failure leaves `unlock` and storage as they were.
+ * Reads the stored header and takes it in (`Unlock.see`); undefined: the vault is empty. A read that fails forgets the
+ * unlock credential, so `unlock()` reads again, with no prompt, and reports the failure (D-94).
  */
-export async function unlockVault(connection: Connection, unlock: Unlock, presented: PresentedUnlock): Promise<void> {
-  const header = await connection.transact([META_STORE, KEYS_STORE], 'readonly', readHeader);
+export async function readHeaderInto(connection: Connection, unlock: Unlock): Promise<HeaderRecord | undefined> {
+  let header: HeaderRecord | undefined;
+  try {
+    header = await connection.transact([META_STORE, KEYS_STORE], 'readonly', readHeader);
+  } catch (error) {
+    unlock.forgetCredential();
+    throw error;
+  }
+  unlock.see(header);
+  return header;
+}
+
+/**
+ * Unlocks this context (D-94, D-77): one prompt for the unlock credential named by this context's last header read,
+ * started before any await; then reads the header, checks the credential is the unlock credential it names, unwraps
+ * the wrapping private key and holds it. Every failure leaves storage as it was.
+ */
+export async function unlockVault(connection: Connection, unlock: Unlock): Promise<void> {
+  const asked = unlock.credentialId;
+  if (asked === undefined) {
+    await readHeaderInto(connection, unlock); // a malformed header fails here, corrupted
+    throw new VaultError('not-found', "This instance's previous header read named no unlock credential");
+  }
+  const pending = presentUnlockPasskey(asked); // the prompt, before any await
+  let presented: PresentedUnlock;
+  try {
+    presented = await pending;
+  } catch (error) {
+    if (error instanceof VaultError && error.code === 'cancelled')
+      await failIfReplaced(connection, unlock, asked, error);
+    throw error;
+  }
+  const header = await readHeaderInto(connection, unlock);
   if (!header) throw new VaultError('not-found', 'The vault is empty: it has no unlock credential');
   const { protection } = header;
   if (protection.kind !== UNLOCK_KIND)
@@ -66,5 +111,18 @@ export async function unlockVault(connection: Connection, unlock: Unlock, presen
     throw new VaultError('not-found', "The presented credential is not the vault's unlock credential");
   if (presented.secret === undefined) throw new VaultError('unsupported', 'The authenticator returned no PRF result');
   const privateKey = await unwrapWrappingKey(presented.secret, { ...header, protection });
-  unlock.hold(header.wrappingPublicKey, privateKey);
+  unlock.hold(header, privateKey);
+}
+
+/**
+ * After a declined prompt for `asked`: `not-found` if the stored header no longer names it. `NotAllowedError` also
+ * covers a credential that no longer exists (D-59), so the header tells a stale id from a cancel.
+ */
+async function failIfReplaced(connection: Connection, unlock: Unlock, asked: Bytes, cause: VaultError): Promise<void> {
+  await readHeaderInto(connection, unlock);
+  const current = unlock.credentialId;
+  if (current === undefined || !equalBytes(current, asked))
+    throw new VaultError('not-found', "The unlock credential the prompt asked for is not the stored header's", {
+      cause,
+    });
 }

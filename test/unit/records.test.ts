@@ -428,6 +428,43 @@ describe('protected header', () => {
       }
     },
   );
+
+  test('a vault with a malformed protected header opens; unlock fails with corrupted and no prompt; wipe empties it', async () => {
+    const { name, header } = await storedRecords();
+    const planted = plantedProtected(header);
+    await writeHeader(name, { ...planted, protection: { ...planted.protection, credentialId: 'id' } });
+    // Playwright's WebKit on Linux has no navigator.credentials: no prompt can start there at all
+    const get = navigator.credentials ? vi.spyOn(navigator.credentials, 'get') : undefined;
+
+    const reopened = await Vault.open({ name });
+    try {
+      await expectVaultError(reopened.unlock(), 'corrupted');
+      expect(get?.mock.calls ?? []).toHaveLength(0);
+      await reopened.wipe();
+      expect(await reopened.state()).toBe('empty');
+    } finally {
+      vi.restoreAllMocks();
+      reopened.close();
+    }
+  });
+
+  test('after state() finds the protected header malformed, unlock fails with corrupted and no prompt', async () => {
+    const { name, header } = await storedRecords();
+    const planted = plantedProtected(header);
+    await writeHeader(name, planted);
+    const reopened = await Vault.open({ name }); // its read names the planted unlock passkey
+    await writeHeader(name, { ...planted, protection: { ...planted.protection, iv: planted.protection.iv.slice(1) } });
+    // Playwright's WebKit on Linux has no navigator.credentials: no prompt can start there at all
+    const get = navigator.credentials ? vi.spyOn(navigator.credentials, 'get') : undefined;
+    try {
+      await expectVaultError(reopened.state(), 'corrupted');
+      await expectVaultError(reopened.unlock(), 'corrupted');
+      expect(get?.mock.calls ?? []).toHaveLength(0);
+    } finally {
+      vi.restoreAllMocks();
+      reopened.close();
+    }
+  });
 });
 
 // The key only gets a vault written; which type it is doesn't matter to these checks.
