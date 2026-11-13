@@ -40,9 +40,25 @@
   </head>
   <body>
     <h1>Vault demo</h1>
-    <p>Mode: unprotected. Keys are encrypted at rest; the root key is a non-extractable browser key.</p>
+    <p>
+      Keys are encrypted at rest. Unprotected, the root key is a non-extractable browser key; protected, it opens only
+      with the vault's unlock passkey.
+    </p>
     <p>Scope: <code id="scope"></code>. Wipe clears every scope of the vault.</p>
+    <p>State: <code id="state">…</code></p>
     <p id="status">Loading…</p>
+
+    <p>
+      <button id="protect">Protect with a passkey</button>
+      <button id="unlock">Unlock</button>
+      <button id="lock">Lock</button>
+    </p>
+    <p>
+      Protect creates the vault's unlock passkey; where the browser gives no passkey secret at creation, it asks for
+      that passkey again at once. Unlock asks for it once and makes every key usable in this tab until Lock or a reload.
+      While locked, ed25519 and secp256k1 keys still generate and list, and fail Sign with
+      <code>locked</code>.
+    </p>
 
     <p>
       <label

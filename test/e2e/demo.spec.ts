@@ -3,13 +3,19 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { openDemo } from './contexts.ts';
+import {
+  generate as generateInConsole,
+  openDemo,
+  protect as protectInConsole,
+  wipe as wipeInConsole,
+} from './contexts.ts';
 import {
   addVirtualAuthenticator,
   CHROMIUM_ONLY,
   freshDevice,
   listPasskeys,
   openWithAuthenticator,
+  PRF_CHROMIUM_ONLY,
   shortenPromptTimeouts,
   verifiesOutsideVault,
   type PageAssertion,
@@ -345,6 +351,109 @@ test('a cancelled passkey prompt in the demo shows its error code, and the demo 
   await expect(rows).toHaveCount(1); // the cancelled generate and add stored nothing
 
   await authenticator.setPresence(true);
+  await rows.nth(0).getByRole('button', { name: 'Sign' }).click();
+  await expect(page.locator('#output')).toHaveAttribute('data-verified', 'true');
+  await expect(status).toHaveText('Ready');
+});
+
+test('demo protects, signs, locks, fails a sealed sign with locked, unlocks and signs again, its state line following each step', async ({
+  context,
+  browserName,
+}, testInfo) => {
+  testInfo.skip(browserName !== 'chromium', PRF_CHROMIUM_ONLY);
+  const page = await openDemo(context);
+  await addVirtualAuthenticator(page, [], { prf: true });
+  const status = page.locator('#status');
+  const state = page.locator('#state');
+  const rows = page.locator('#keys tr');
+  const output = page.locator('#output');
+  const sign = () => rows.nth(0).getByRole('button', { name: 'Sign' }).click();
+  await expect(state).toHaveText('empty');
+  await generate(page, 'ed25519');
+  await expect(rows).toHaveCount(1);
+  await expect(state).toHaveText('unprotected');
+  const prompts = await countPromptsAtClicks(page);
+
+  await page.click('#protect');
+  await expect(state).toHaveText('unlocked'); // the protecting tab is unlocked (D-83)
+  await expect(status).toHaveText('Ready');
+  await sign();
+  await expect(output).toHaveAttribute('data-verified', 'true');
+
+  await page.click('#lock');
+  await expect(state).toHaveText('locked');
+  await output.evaluate((element) => delete element.dataset.verified);
+  await sign();
+  await expect(status).toHaveText(/^VaultError locked: /);
+  await expect(status).toHaveClass('error');
+  await expect(output).not.toHaveAttribute('data-verified');
+
+  await page.click('#unlock');
+  await expect(state).toHaveText('unlocked');
+  await expect(status).toHaveText('Ready');
+  await sign();
+  await expect(output).toHaveAttribute('data-verified', 'true');
+  await expect(rows).toHaveCount(1);
+  // protect, sign, lock, sign, unlock, sign: protect and unlock each started their one prompt within the click
+  expect(await prompts.atClicks()).toEqual([1, 0, 0, 0, 1, 0]);
+
+  await page.click('#wipe');
+  await expect(state).toHaveText('empty');
+  await expect(rows).toHaveCount(0);
+});
+
+test('the demo shows another tab’s generate and wipe on onChange, its state line and key list refreshed', async ({
+  context,
+}) => {
+  const page = await openDemo(context);
+  const other = await openDemo(context);
+  const state = page.locator('#state');
+  const rows = page.locator('#keys tr');
+  await expect(state).toHaveText('empty');
+
+  await generateInConsole(other);
+  await expect(state).toHaveText('unprotected');
+  await expect(rows).toHaveCount(1);
+  await wipeInConsole(other);
+  await expect(state).toHaveText('empty');
+  await expect(rows).toHaveCount(0);
+  await expect(page.locator('#status')).toHaveText('Ready');
+});
+
+test('the demo shows locked on onChange when another tab protects, and its sealed key fails Sign with locked', async ({
+  context,
+  browserName,
+}, testInfo) => {
+  testInfo.skip(browserName !== 'chromium', PRF_CHROMIUM_ONLY);
+  const page = await openDemo(context);
+  const other = await openDemo(context);
+  await addVirtualAuthenticator(other, [], { prf: true });
+  const state = page.locator('#state');
+  const status = page.locator('#status');
+  await generate(page, 'ed25519');
+  await expect(state).toHaveText('unprotected');
+
+  await protectInConsole(other);
+  await expect(state).toHaveText('locked');
+  await page.locator('#keys tr').nth(0).getByRole('button', { name: 'Sign' }).click();
+  await expect(status).toHaveText(/^VaultError locked: /);
+});
+
+test('demo Protect without PRF results shows VaultError unsupported and leaves the vault and its key as they were', async ({
+  context,
+  browserName,
+}, testInfo) => {
+  testInfo.skip(browserName === 'chromium', 'Playwright’s credentials stand-in returns no PRF results (D-80)');
+  const { page } = await openWithAuthenticator(context, browserName);
+  const state = page.locator('#state');
+  const status = page.locator('#status');
+  const rows = page.locator('#keys tr');
+  await generate(page, 'ed25519');
+  await expect(state).toHaveText('unprotected');
+
+  await page.click('#protect');
+  await expect(status).toHaveText(/^VaultError unsupported: /);
+  await expect(state).toHaveText('unprotected');
   await rows.nth(0).getByRole('button', { name: 'Sign' }).click();
   await expect(page.locator('#output')).toHaveAttribute('data-verified', 'true');
   await expect(status).toHaveText('Ready');
