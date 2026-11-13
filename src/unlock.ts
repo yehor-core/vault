@@ -17,13 +17,20 @@ export class Unlock {
 
   /** Whether this context opens the keys of the protected `header`. */
   isUnlocked(header: HeaderRecord): boolean {
-    return this.#held !== undefined && equalBytes(this.#held.wrappingPublicKey, header.wrappingPublicKey);
+    return this.#heldFor(header) !== undefined;
   }
 
   /** The wrapping private key that opens the keys sealed to `header`; `locked` if this context doesn't hold it. */
   wrappingPrivateKey(header: HeaderRecord): CryptoKey {
     if (header.protection.kind === 'none') return header.protection.privateKey; // unprotected: the header holds it
-    if (this.#held === undefined || !this.isUnlocked(header)) throw new VaultError('locked', 'The vault is locked');
-    return this.#held.privateKey;
+    const held = this.#heldFor(header);
+    if (held === undefined) throw new VaultError('locked', 'The vault is locked');
+    return held.privateKey;
+  }
+
+  /** The held key, if it belongs to `header`. */
+  #heldFor(header: HeaderRecord): { readonly privateKey: CryptoKey } | undefined {
+    const held = this.#held;
+    return held && equalBytes(held.wrappingPublicKey, header.wrappingPublicKey) ? held : undefined;
   }
 }

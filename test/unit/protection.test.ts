@@ -137,6 +137,14 @@ describe.runIf(hasVirtualAuthenticator)('protect, with the PRF result at creatio
     expect(userId.slice(0, 16)).toEqual((await sha256(UNLOCK_PRF_INPUT)).slice(0, 16));
     expect(create).toHaveBeenCalledTimes(1); // one prompt: the result came at creation
     expect(await authenticator.credentials()).toHaveLength(1);
+
+    // The last 16 bytes are fresh for each unlock passkey, so a second one never overwrites the first.
+    const { vault: another } = await openVault();
+    await another.protect();
+    const second = new Uint8Array(create.mock.calls[1]?.[0]?.publicKey?.user.id as ArrayBuffer);
+    expect(second.slice(0, 16)).toEqual(userId.slice(0, 16));
+    expect(second.slice(16)).not.toEqual(userId.slice(16));
+    expect(await authenticator.credentials()).toHaveLength(2);
   });
 
   test('the protected header wraps the wrapping private key under a KEK from the PRF result, bound to every other field', async () => {
@@ -244,6 +252,7 @@ function shortCreateTimeout() {
   );
 }
 
+// Chromium only, as above (D-80): no PRF and a declined prompt need the virtual authenticator.
 describe.runIf(hasVirtualAuthenticator)('protect, failing', () => {
   afterEach(async () => {
     vi.restoreAllMocks();
@@ -282,6 +291,7 @@ describe.runIf(hasVirtualAuthenticator)('protect, failing', () => {
   });
 });
 
+// Chromium only, as above (D-80): protect needs the virtual authenticator's PRF result.
 describe.runIf(hasVirtualAuthenticator)('after protect', () => {
   beforeEach(async () => {
     authenticator = await addVirtualAuthenticator({ hasPrf: true });
