@@ -1,5 +1,5 @@
 import { sha256 } from '@noble/hashes/sha2.js';
-import { encode, type Bytes } from './bytes.ts';
+import { encode, equalBytes, type Bytes } from './bytes.ts';
 import { VaultError } from './errors.ts';
 import { creationOptions, isUserVerified, noUserVerification, prompt, readCreated } from './key-types/passkey.ts';
 import { assertOnlyFields, corrupted, readBytes, type Fields } from './readers.ts';
@@ -67,9 +67,8 @@ export async function presentUnlockPasskey(): Promise<PresentedUnlock> {
 }
 
 /**
- * Creates the unlock passkey, with its prompt started before any await, and returns its PRF result (D-74). Where
- * the creation reports PRF enabled but returns no result, a second prompt for the new passkey follows at once, with
- * no other await, and gives it. PRF not enabled, or no result from the second prompt, is `unsupported`.
+ * Creates the unlock passkey, with its prompt started before any await, and returns its PRF result (D-74). The second
+ * prompt follows the creation with no other await, so it runs in the same user activation.
  */
 export async function createUnlockPasskey(): Promise<UnlockSecret> {
   const publicKey = {
@@ -80,7 +79,13 @@ export async function createUnlockPasskey(): Promise<UnlockSecret> {
   const credential = await prompt(pending);
   const { credentialId } = readCreated(credential);
   const prf = credential instanceof PublicKeyCredential ? credential.getClientExtensionResults().prf : undefined;
-  const result = prf?.results?.first ?? (prf?.enabled === true ? (await assertUnlock(credentialId)).result : undefined);
+  let result = prf?.results?.first;
+  if (result === undefined && prf?.enabled === true) {
+    const second = await assertUnlock(credentialId);
+    if (!equalBytes(second.credentialId, credentialId))
+      throw new VaultError('unavailable', 'The second prompt was answered by another passkey');
+    result = second.result;
+  }
   if (result === undefined) throw new VaultError('unsupported', 'The authenticator returned no PRF result');
   const secret = await importSecret(result);
   return { credentialId, secret };

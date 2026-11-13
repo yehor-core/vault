@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { Vault } from '../../src/index.ts';
+import { Vault, type Scope } from '../../src/index.ts';
 import {
   addVirtualAuthenticator,
   hasVirtualAuthenticator,
@@ -347,14 +347,12 @@ describe.runIf(hasVirtualAuthenticator)('protect, with no PRF result at creation
     });
   });
 
-  test('the second prompt starts before any task runs after the creation settles: no other await in between', async () => {
+  test('the second prompt starts before any task runs once the creation is answered', async () => {
     const { vault, scope } = await openVault();
     await scope.generate('ed25519'); // a header and a key: work protect could start before the second prompt
     const get = vi.spyOn(navigator.credentials, 'get');
-    const original = CredentialsContainer.prototype.create;
     const startedBeforeAnyTask = Promise.withResolvers<boolean>();
-    vi.spyOn(navigator.credentials, 'create').mockImplementationOnce(async (options?: CredentialCreationOptions) => {
-      const credential = await original.call(navigator.credentials, options);
+    afterCreation(() => {
       // No task runs while microtasks are queued: this chain, re-queued until get() is called, holds back every
       // answer that comes in a task (IndexedDB, timers), so awaiting one before the second prompt ends it with false.
       let hops = 0;
@@ -364,7 +362,6 @@ describe.runIf(hasVirtualAuthenticator)('protect, with no PRF result at creation
         else startedBeforeAnyTask.resolve(false);
       };
       queueMicrotask(spin);
-      return credential;
     });
 
     await vault.protect();
@@ -374,7 +371,7 @@ describe.runIf(hasVirtualAuthenticator)('protect, with no PRF result at creation
 
   test('a vault protected after two prompts unlocks in another instance with one prompt', async () => {
     const [first, second] = await openContexts();
-    const key = asSealed(await first.scope.generate('secp256k1'));
+    const key = asSealed(await first.scope.generate('secp256k1')); // any sealed type: it shows the unlock works
     await first.vault.protect();
     const get = vi.spyOn(navigator.credentials, 'get');
 
@@ -385,37 +382,61 @@ describe.runIf(hasVirtualAuthenticator)('protect, with no PRF result at creation
     await expect(second.scope.sign(key, message)).resolves.toMatchObject({ type: 'secp256k1' });
   });
 
-  test.each([
-    ['a declined second prompt', 'cancelled'],
-    ['a second assertion without a PRF result', 'unsupported'],
-    ['a second assertion without user verification', 'unsupported'],
-  ] as const)('protect with %s fails with %s after two prompts, and the vault is unchanged', async (failure, code) => {
-    const [first, second] = await openContexts();
-    const key = asSealed(await first.scope.generate('ed25519'));
-    const before = await readAll(first.name);
-    const notified = [vi.fn(), vi.fn()];
-    first.vault.onChange(notified[0] ?? vi.fn());
-    second.vault.onChange(notified[1] ?? vi.fn());
-    const create = vi.spyOn(navigator.credentials, 'create');
-    if (failure === 'a declined second prompt') {
-      declineAfterCreation();
-      shortGetTimeout();
-    } else if (failure === 'a second assertion without a PRF result') {
-      vi.spyOn(PublicKeyCredential.prototype, 'getClientExtensionResults').mockReturnValue({ prf: { enabled: true } });
-    } else {
-      await authenticator.overrideResponses({ isBadUV: true });
-    }
-    const get = vi.spyOn(navigator.credentials, 'get');
+  /** Each failure of the second prompt, set up on a vault whose `scope` the test then protects. */
+  const secondPromptFailures = [
+    {
+      failure: 'a declined second prompt',
+      code: 'cancelled',
+      setUp: async () => {
+        afterCreation(() => authenticator.setPresence(false)); // the creation is answered, the second prompt not
+        shortGetTimeout();
+      },
+    },
+    {
+      failure: 'a second assertion without a PRF result',
+      code: 'unsupported',
+      setUp: async () => {
+        vi.spyOn(PublicKeyCredential.prototype, 'getClientExtensionResults').mockReturnValue({
+          prf: { enabled: true },
+        });
+      },
+    },
+    {
+      failure: 'a second assertion without UV',
+      code: 'unsupported',
+      setUp: () => authenticator.overrideResponses({ isBadUV: true }),
+    },
+    {
+      failure: 'a second assertion by another passkey',
+      code: 'unavailable',
+      setUp: async (scope: Scope) => pickPasskey((await scope.generate('passkey')).credentialId),
+    },
+  ] as const;
 
-    await expectVaultError(first.vault.protect(), code);
+  test.each(secondPromptFailures)(
+    'protect with $failure fails with $code after two prompts, and the vault is unchanged',
+    async ({ code, setUp }) => {
+      const [first, second] = await openContexts();
+      const key = asSealed(await first.scope.generate('ed25519')); // any sealed type: it shows the vault unchanged
+      const create = vi.spyOn(navigator.credentials, 'create');
+      const get = vi.spyOn(navigator.credentials, 'get');
+      await setUp(first.scope);
+      const calls = [create.mock.calls.length, get.mock.calls.length];
+      const before = await readAll(first.name);
+      const notified = [vi.fn(), vi.fn()];
+      first.vault.onChange(notified[0] ?? vi.fn());
+      second.vault.onChange(notified[1] ?? vi.fn());
 
-    expect([create.mock.calls.length, get.mock.calls.length]).toEqual([1, 1]);
-    expect(await readAll(first.name)).toEqual(before);
-    expect(await first.vault.state()).toBe('unprotected');
-    await expect(first.scope.sign(key, message)).resolves.toMatchObject({ type: 'ed25519' });
-    await settle();
-    expect(notified.map((listener) => listener.mock.calls.length)).toEqual([0, 0]);
-  });
+      await expectVaultError(first.vault.protect(), code);
+
+      expect([create.mock.calls.length, get.mock.calls.length]).toEqual([(calls[0] ?? 0) + 1, (calls[1] ?? 0) + 1]);
+      expect(await readAll(first.name)).toEqual(before);
+      expect(await first.vault.state()).toBe('unprotected');
+      await expect(first.scope.sign(key, message)).resolves.toMatchObject({ type: 'ed25519' });
+      await settle();
+      expect(notified.map((listener) => listener.mock.calls.length)).toEqual([0, 0]);
+    },
+  );
 });
 
 // Chromium only, as above (D-80): protect needs the virtual authenticator's PRF result.
@@ -517,12 +538,12 @@ function shortGetTimeout() {
 /** What sign of a key sealed to the replaced header fails with, under each replacement. */
 const SIGN_ERROR_UNDER = { locked: 'locked', unprotected: 'corrupted', empty: 'not-found' } as const;
 
-/** Answers the next `create` prompt, then turns presence off before Vault sees the answer: the next prompt is declined. */
-function declineAfterCreation() {
+/** Runs `hook` once the next `create` prompt is answered, before Vault sees the answer. */
+function afterCreation(hook: () => unknown) {
   const original = CredentialsContainer.prototype.create;
   vi.spyOn(navigator.credentials, 'create').mockImplementationOnce(async (options?: CredentialCreationOptions) => {
     const credential = await original.call(navigator.credentials, options);
-    await authenticator.setPresence(false);
+    await hook();
     return credential;
   });
 }
