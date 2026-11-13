@@ -397,9 +397,16 @@ test('demo protects, signs, locks, fails a sealed sign with locked, unlocks and 
   // protect, sign, lock, sign, unlock, sign: protect and unlock each started their one prompt within the click
   expect(await prompts.atClicks()).toEqual([1, 0, 0, 0, 1, 0]);
 
+  await page.click('#protect');
+  await expect(status).toHaveText(/^VaultError protected: /);
+  await expect(state).toHaveText('unlocked');
+
   await page.click('#wipe');
   await expect(state).toHaveText('empty');
   await expect(rows).toHaveCount(0);
+  await page.click('#unlock'); // the unlock passkey is still on the authenticator; the vault it opened is gone
+  await expect(status).toHaveText(/^VaultError not-found: /);
+  await expect(state).toHaveText('empty');
 });
 
 test('the demo shows another tab’s generate and wipe on onChange, its state line and key list refreshed', async ({
