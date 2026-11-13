@@ -28,6 +28,14 @@ _Avoid_: import, register, discover, recover
 The one passkey that unlocks a protected vault. It belongs to the vault as a whole, not to a scope, and it signs nothing.
 _Avoid_: protection passkey, master passkey, global key
 
+**Protection**:
+The vault-wide setting under which keys with a sealed private key can sign only after the user presents the unlock passkey. A vault is unprotected or protected; once protected, it stays protected until it is wiped. Keys are encrypted in either mode.
+_Avoid_: encryption (for the setting), password, lock (for the setting); "protected" for a single key
+
+**Locked**, **Unlocked**:
+How one context sees a protected vault. While locked, keys with a sealed private key can't sign; the user unlocks by presenting the unlock passkey, and then every key is usable in that context until it locks or closes the vault. Each context unlocks on its own, and the unlocked state is never stored.
+_Avoid_: open, closed (they mean opening and closing the vault in a context); logged in
+
 **Scope**:
 A named group of keys inside one vault. It has no record of its own: it is there while it holds keys, and all scopes share the vault's protection and its wipe.
 _Avoid_: namespace, account, wallet, tenant, consumer
