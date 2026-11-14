@@ -8,6 +8,7 @@ import {
   prompt,
   readCreatedId,
   secondPrompt,
+  type StartPrompt,
 } from './key-types/passkey.ts';
 import { assertOnlyFields, corrupted, readBytes, type Fields } from './readers.ts';
 import { IV_LENGTH, P256 } from './seal.ts';
@@ -115,12 +116,13 @@ export async function createUnlockPasskey(): Promise<UnlockSecret> {
 }
 
 /**
- * A prompt for the unlock passkey `credentialId`, started before any await. User verification is required and
- * checked: without it, an `hmac-secret` authenticator returns another PRF result.
+ * A prompt for the unlock passkey `credentialId`, started by `ask`: at once by default, before any await; once the
+ * page has focus with `secondPrompt` (D-96). User verification is required and checked: without it, an `hmac-secret`
+ * authenticator returns another PRF result.
  */
 async function assertUnlock(
   credentialId: Bytes,
-  ask: (start: () => Promise<Credential | null>) => Promise<Credential | null> = (start) => prompt(start()),
+  ask: (start: StartPrompt) => Promise<Credential | null> = (start) => prompt(start()),
 ): Promise<{ credentialId: Bytes; result: BufferSource | undefined }> {
   const publicKey: PublicKeyCredentialRequestOptions = {
     challenge: crypto.getRandomValues(new Uint8Array(UNLOCK_CHALLENGE_LENGTH)),
@@ -128,7 +130,7 @@ async function assertUnlock(
     userVerification: 'required',
     extensions: { prf: { eval: { first: PRF_INPUT } } },
   };
-  const credential = await ask(() => navigator.credentials.get({ publicKey })); // started by `ask`, before any await
+  const credential = await ask(() => navigator.credentials.get({ publicKey }));
   if (!(credential instanceof PublicKeyCredential) || !(credential.response instanceof AuthenticatorAssertionResponse))
     throw new VaultError('unavailable', 'The browser returned no passkey assertion');
   if (!isUserVerified(new Uint8Array(credential.response.authenticatorData)))

@@ -288,18 +288,15 @@ export function noPublicKeyAtCreation(): void {
 }
 
 /**
- * From here on, the page loses its focus whenever a passkey prompt is answered, and a `get()` while it has none
- * rejects with `NotAllowedError` "The document is not focused.", as Safari 27.2 with a security key does (#111). With
- * `regainAfter`, the focus comes back that many ms after each answer, with the window's `focus` event, as Safari gives
- * it back about 575 ms later; without it, only `regain()` gives it back. An injected failure: every answer is the
- * authenticator's. `vi.restoreAllMocks()` ends it.
+ * An injected failure, as Safari 27.2 with a security key behaves (#111): the page loses focus at every answered
+ * prompt, a `get()` without it rejects, and focus returns `regainAfter` ms later (Safari: about 575), else at `regain()`.
  */
 export function focusLostAtPrompt(regainAfter?: number) {
   let focused = true;
   const hasFocus = vi.spyOn(Document.prototype, 'hasFocus').mockImplementation(() => focused);
   const regain = () => {
     // A regain timer left by this test must not give the next test a focus event.
-    if (!vi.isMockFunction(Document.prototype.hasFocus) || Document.prototype.hasFocus !== hasFocus) return;
+    if (Document.prototype.hasFocus !== hasFocus) return;
     focused = true;
     window.dispatchEvent(new FocusEvent('focus'));
   };

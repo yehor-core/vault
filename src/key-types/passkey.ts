@@ -183,13 +183,14 @@ export async function prompt(pending: Promise<Credential | null>): Promise<Crede
   }
 }
 
+/** Starts one WebAuthn call: a prompt. */
+export type StartPrompt = () => Promise<Credential | null>;
+
 /**
- * D-96: a prompt chained right after another one (`add`, `protect()`). With page focus, `start` runs at once, before
- * any await. Without it, as Safari 27.2 leaves a page after a security key's prompt, it runs once the window's `focus`
- * event fires, at most `FOCUS_WAIT_MS` later; a browser refuses `get()` while the page has no focus. No focus by then,
- * or a `NotAllowedError` while the page has none, is `unavailable` (retryable): the user cancelled nothing.
+ * D-96: a prompt chained after another (`add`, `protect()`). Safari 27.2 refuses `get()` until it gives the page its
+ * focus back, so without focus this waits for it; a refusal then is no cancel by the user.
  */
-export async function secondPrompt(start: () => Promise<Credential | null>): Promise<Credential | null> {
+export async function secondPrompt(start: StartPrompt): Promise<Credential | null> {
   if (!document.hasFocus() && !(await focusWithin(FOCUS_WAIT_MS))) throw noFocus();
   try {
     return await prompt(start());
@@ -200,7 +201,9 @@ export async function secondPrompt(start: () => Promise<Credential | null>): Pro
 }
 
 function noFocus(cause?: unknown): VaultError {
-  return new VaultError('unavailable', 'The second passkey prompt could not open: the page has no focus', { cause });
+  return new VaultError('unavailable', 'The second passkey prompt was refused or not started: the page has no focus', {
+    cause,
+  });
 }
 
 /** Resolves true once the window's `focus` event fires, false after `ms`. */
