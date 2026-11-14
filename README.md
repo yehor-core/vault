@@ -2,7 +2,7 @@
 
 A browser-native private-key store on top of IndexedDB: ed25519, secp256k1 and passkey keys in named scopes, encrypted at rest, in a vault that is unprotected or passkey-protected. Design: [DESIGN.md](DESIGN.md).
 
-> Status: S7 in progress.
+> Status: S7 done.
 
 ## Demo
 

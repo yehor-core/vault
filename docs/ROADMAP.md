@@ -66,7 +66,7 @@ Status: done · Spec: #79 · Tickets: #80, #81, #82, #83, #84, #85, #86
 - protection change across tabs
 
 ## S7: Demo and docs
-Status: in progress · Spec: #96 · Tickets: #97, #98, #99, #100, #101, #102
+Status: done · Spec: #96 · Tickets: #97, #98, #99, #100, #101, #102
 - full demo, incl. passkey key in a fresh profile
 - decide whether the demo shows scopes
 - DESIGN.md
