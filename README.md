@@ -2,15 +2,13 @@
 
 A browser-native private-key store on top of IndexedDB. Design: [DESIGN.md](DESIGN.md).
 
-> Status: S7 in progress. A vault, unprotected or passkey-protected, with ed25519, secp256k1 and passkey keys in named scopes: generate, list, sign, delete per scope; wipe for the whole vault. Keys are encrypted at rest in a versioned storage format, records are validated and fail closed, and errors are classified. Keys can carry a label, fixed at generate. Several tabs can use one vault at once: concurrent writes lose no update, first-time setup converges, a stale tab can't undo a wipe, and `vault.onChange` tells every tab that the vault may have changed. A passkey key is created, listed, signed with and deleted through the same calls, each prompt started before any await; `scope.add('passkey')` adds an existing passkey on a fresh device, with the same key id as everywhere else. `vault.protect()` turns passkey protection on, keeping every key, with one passkey prompt where the browser returns the PRF result at creation and two where it doesn't; the protecting tab is unlocked, every other tab locked. `vault.unlock()` unlocks a tab with one passkey prompt, for every scope, until `lock()` or `close()`; an edited protected header fails it with `corrupted`. `protect()` is atomic across tabs and crashes. `Vault.protectionSupport()` reports `unsupported` up front where protection certainly can't work, else `unknown`; elsewhere `protect()` fails with `unsupported` and changes nothing. The demo protects, unlocks and locks, and shows the vault's state.
+> Status: S7 in progress. ed25519, secp256k1 and passkey keys in named scopes, encrypted at rest, in a vault that is unprotected or passkey-protected: generate, list, sign and delete per scope, add an existing passkey on a fresh device, wipe the whole vault. `protect()` turns protection on atomically, keeping every key; `unlock()` takes one prompt. Records are validated and fail closed, errors are classified, and several tabs share one vault safely.
 
 ## Demo
 
-Live at https://yehor-core.github.io/vault/, over HTTPS, without cloning the repository: `.github/workflows/pages.yml` builds it with `npm run build:demo` and deploys it to GitHub Pages on every push to `main` (one-time setup by the repository owner: Settings → Pages → Source: GitHub Actions). Locally, `npm run demo` serves the same page on localhost.
+Live at https://yehor-core.github.io/vault/, over HTTPS: `.github/workflows/pages.yml` builds it with `npm run build:demo` and deploys it to GitHub Pages on every push to `main` (one-time setup: Settings → Pages → Source: GitHub Actions). Locally, `npm run demo` serves the same page.
 
-Passkeys made on the Pages demo and on localhost are different credentials: their relying-party ids differ (`yehor-core.github.io` and `localhost`), so a passkey from one can't be added or used on the other.
-
-To sign with a passkey key in a fresh browser profile, follow the [walkthrough](#signing-with-a-passkey-key-in-a-fresh-profile) below. The passkey checks done by hand in Firefox and Safari follow the checklist in [docs/manual-checks.md](docs/manual-checks.md).
+The demo generates keys of each type, adds an existing passkey, lists, signs (and verifies each signature outside Vault), deletes and wipes in one fixed scope, `demo`; it protects, unlocks and locks, and shows `vault.state()`. Passkeys made on the Pages demo and on localhost are different credentials (relying-party ids `yehor-core.github.io` and `localhost`), so one can't be used on the other.
 
 ### Signing with a passkey key in a fresh profile
 
@@ -37,21 +35,21 @@ npx playwright install --with-deps chromium firefox webkit   # --with-deps insta
 | Command | What it does |
 |---|---|
 | `npm run build` | Compiles the library to `dist/` (ES modules and `.d.ts`) |
-| `npm run demo` | Serves the demo page at http://localhost:5173: generate a key of any type (ed25519, secp256k1, passkey) with an optional label, add an existing passkey key, list (a passkey key with its credential id), sign (verified outside Vault: ed25519 with WebCrypto, secp256k1 with `@noble/curves`, a passkey assertion as a relying party checks it, with WebCrypto), delete in one fixed scope, `demo`; wipe. Protect with a passkey, Unlock and Lock; a state line shows `vault.state()` (`empty`, `unprotected`, `locked`, `unlocked`), refreshed after every action and when another tab changes the vault. A cancelled passkey prompt, a locked sign and a protect without PRF show their error code |
-| `npm run build:demo` | Builds the published demo into `demo-dist/` under the GitHub Pages base path, `/vault/`, as the Pages workflow does; the dev-only console global `Vault` is left out. `npm run preview:demo` serves that build at http://localhost:4173/vault/ |
-| `npm run typecheck` | Type checks browser code (`tsconfig.json`, no Node globals) and Node-side config, scripts and e2e tests (`tsconfig.node.json`) |
-| `npm run lint` | oxlint: the coding-standards rules marked _(oxlint)_ (`.oxlintrc.json`) |
-| `npm run format:check` | Prettier over the whole repo; the pre-commit hook formats only staged files, so CI runs this to catch drift elsewhere |
-| `npm run check:casts` | Checks that every type assertion (`as`, not `as const`) in `src/` and `demo/` has a comment holding `` `as`: `` that names the check making it safe |
-| `npm run check:refs` | Checks that every test (`storage › …`) and every code name (`src/scope.ts` `#commitKeyRecord`) cited in `DESIGN.md` and `README.md` still exists, and that every "not tested" mark names its ticket (`#NN`) or says "not protected" |
-| `npm run check:decisions` | Checks that no past decision in `docs/DECISIONS.md` was rewritten since the merge-base with `origin/main`: it only gains notes naming a new decision |
+| `npm run demo` | Serves the demo at http://localhost:5173 |
+| `npm run build:demo` | Builds the published demo into `demo-dist/` under `/vault/`, without the dev-only console global `Vault`; `npm run preview:demo` serves it at http://localhost:4173/vault/ |
+| `npm run typecheck` | Type checks browser code (`tsconfig.json`) and Node-side code (`tsconfig.node.json`) |
+| `npm run lint` | oxlint (`.oxlintrc.json`) |
+| `npm run format:check` | Prettier over the whole repo |
+| `npm run check:casts` | Every type assertion in `src/` and `demo/` has a comment naming the check that makes it safe |
+| `npm run check:refs` | Every test and code name cited in `DESIGN.md` and `README.md` exists |
+| `npm run check:decisions` | No past decision in `docs/DECISIONS.md` was rewritten |
 | `npm run test:unit` | Vitest Browser Mode in real Chromium, Firefox and WebKit (`test/unit`) |
-| `npm run test:e2e` | Playwright against the demo page in Chromium, Firefox and WebKit (`test/e2e`); starts its own servers: the dev demo on :5174, and the production build under `/vault/` on :5175 for the published-demo smoke test |
-| `npm run test:scripts` | Node tests of the repo's own scripts (`scripts/*.test.ts`), e.g. that `check:refs` rejects a bad citation, `check:decisions` a rewritten decision, `check:casts` an unexplained cast, and that `break-check` reports red correctly (`--typecheck`, `--batch`, and the engines a vitest or Playwright break runs in) |
+| `npm run test:e2e` | Playwright against the demo in Chromium, Firefox and WebKit (`test/e2e`): the dev server, and the production build for a smoke test |
+| `npm run test:scripts` | Node tests of the repo's scripts (`scripts/*.test.ts`) |
 | `npm test` | Script tests, then both suites |
-| `npx vitest run <file> -t '<name>' --project chromium` | One unit test in one engine (`chromium`, `firefox` or `webkit`): the fast TDD loop |
-| `npm run break-check -- <file> <text> <replacement> <test file> '<name>' [engine]` | Breaks the code once, runs the test, restores the code; exit 0 only if the test went red. Without `engine`, the test runs in Chromium, Firefox and WebKit and must go red in each; name one engine for a fast loop. A test file under `test/e2e/` runs in Playwright, any other in vitest. `--typecheck <file> <text> <replacement> <test file>`: red when `npm run typecheck` fails in that test file. `--batch <breaks.json>`: a JSON array of `{ file, text, replacement, test, pattern?, engine?, typecheck? }`, each run alone |
-| `npm run console-snippets -- <report.md> [engine]` | Runs the report's ```` ```js ```` blocks in the dev demo, in one scope as if pasted into DevTools in order, and prints their console output per engine (default: all three); exit 0 only if none threw. The demo sets `Vault` as a console global in dev |
+| `npx vitest run <file> -t '<name>' --project chromium` | One unit test in one engine |
+| `npm run break-check -- <file> <text> <replacement> <test file> '<name>' [engine]` | Breaks the code once, runs the test, restores the code; exit 0 only if the test went red in every engine. `--typecheck` for type-level tests, `--batch <breaks.json>` for several |
+| `npm run console-snippets -- <report.md> [engine]` | Runs a report's ```` ```js ```` blocks in the dev demo and prints their console output |
 
 ```ts
 import { Vault } from 'vault';
@@ -87,41 +85,25 @@ Three faults of Vault these runs found were fixed and the runs repeated (4b, 1b,
 
 Not checked by hand: Windows, Linux, Android and iOS; Chromium on real authenticators (only its virtual authenticator, in the suite); iCloud Keychain on the Mac itself (turned off by the Mac's management policy); a security key with `prf` or `hmac-secret-mc`; several passkey keys in one scope; deleted or tampered records.
 
-Passkey keys, where each path is tested:
+Where the passkey and protection paths are tested:
 
-| Passkey path | Chromium | Firefox | WebKit |
+| Path | Chromium | Firefox | WebKit |
 |---|---|---|---|
-| `generate`, `list`, `sign`; the assertion verifies outside Vault under the returned public key | unit + e2e | e2e (stand-in) | e2e (stand-in) |
-| Several passkey keys in one scope, each signing on its own | unit + e2e | e2e (stand-in) | e2e (stand-in) |
-| `add` on a fresh device (new browser context, empty vault): same id and public key, then `sign` | unit + e2e | e2e (stand-in) | e2e (stand-in) |
-| Each prompt starts before the first await, from a click handler | unit + e2e | e2e (stand-in) | e2e (stand-in) |
-| A declined prompt is `cancelled`; an answer without user verification is `unsupported` | unit + e2e | — | — |
-| Assertion checks, `add` failures, records and tampering | unit | storage and recovery vectors only | storage and recovery vectors only |
+| Passkey `generate`, `sign`, several keys in one scope, `add` on a fresh device, prompts started from a click | unit + e2e | e2e (stand-in); by hand | e2e (stand-in); by hand in Safari |
+| A declined prompt is `cancelled`; no user verification is `unsupported` | unit + e2e | by hand (`cancelled` only) | by hand in Safari (`cancelled` only) |
+| `Vault.protectionSupport()`; `protect()` without a PRF result fails with `unsupported`, the vault unchanged | unit + e2e | unit + e2e (stand-in) | unit + e2e (stand-in) |
+| `protect()` with one or two prompts, `unlock()`, `lock()`, no downgrade | unit | by hand | by hand in Safari |
+| Tampered protected headers; `protect()` across tabs and through a closed or crashed page | unit + e2e | not protected | not protected |
 
-Chromium drives its own WebAuthn stack through a CDP virtual authenticator. In Firefox and WebKit the e2e tests run against Playwright's JavaScript stand-in for `navigator.credentials` (`browserContext.credentials`), not the engine's WebAuthn: it always signs ES256 with user presence and user verification, so it can't decline a prompt or answer without user verification, and it checks no user activation. Playwright's WebKit on Linux has no WebAuthn at all (no `navigator.credentials`, and `PublicKeyCredential` is no constructor), so the tests also define empty `PublicKeyCredential` and `Authenticator…Response` classes for the stand-in to build its answers on (`test/e2e/passkeys.ts`). Real passkeys in Firefox and Safari were checked by hand (above).
+Chromium drives its own WebAuthn through a CDP virtual authenticator, the only one that returns PRF results. In Firefox and WebKit the e2e tests use Playwright's JavaScript stand-in for `navigator.credentials` ("stand-in"): it always answers ES256 with user verification, so it can't decline, drop user verification or return a PRF result, and checks no user activation. Playwright's WebKit on Linux has no WebAuthn at all, so the tests define empty WebAuthn classes for the stand-in (`test/e2e/passkeys.ts`), and `protectionSupport()` there is `unsupported`.
 
-Protection, where each path is tested:
-
-| Protection path | Chromium | Firefox | WebKit |
-|---|---|---|---|
-| `Vault.protectionSupport()`: `unsupported` without WebAuthn or with `extension:prf` reported false, otherwise `unknown`; no prompt, no database | unit | unit | unit |
-| `protect()` with an authenticator that returns no PRF result fails with `unsupported`; the vault stays unprotected and every key signs | unit + e2e | e2e (stand-in) | e2e (stand-in) |
-| `protect()` with one or two prompts, `unlock()`, `lock()`, no downgrade, tampered protected headers | unit | by hand: prompts, `unlock()`, `lock()`, a failed and a cancelled `unlock()` (above); tampered headers: not protected | by hand in Safari: the same (above); tampered headers: not protected |
-| `protect()` across tabs and through a closed or crashed page | unit + e2e | not checked by hand: not protected | not checked by hand: not protected |
-
-Only Chromium's virtual authenticator returns PRF results. Playwright's stand-in returns none, so protection's main paths in Firefox and WebKit are checked only by hand, with the demo (above). In Playwright's WebKit on Linux, `protectionSupport()` is `unsupported`: the engine has no WebAuthn (with the stand-in's classes installed it is `unknown`).
-
-Needs WebCrypto Ed25519, ECDH P-256, HKDF and AES-GCM, IndexedDB and `Uint8Array.prototype.toBase64` (ES2026), in a secure context. secp256k1, ed25519 verification and passkey assertion checks run on `@noble/curves` 2.3.0, and the SHA-256 computed before a passkey prompt on `@noble/hashes` 2.3.0, both pinned exactly (DESIGN.md §3.3). WebKit (Playwright, Linux) has four quirks that shape the design; see DESIGN.md §8:
-- It loses stored X25519 keys.
-- Its point import accepts off-curve points.
-- Its Ed25519 key generation fails about 0.7% of the time (Vault retries it).
-- Its Ed25519 verify crashes the tab on degenerate public keys, so Vault verifies ed25519 on `@noble/curves` and never calls it.
+Needs WebCrypto Ed25519, ECDH P-256, HKDF and AES-GCM, IndexedDB and `Uint8Array.prototype.toBase64`, in a secure context. secp256k1 and verification run on `@noble/curves` 2.3.0 and `@noble/hashes` 2.3.0, pinned exactly. WebKit's quirks that shape the design (stored X25519 keys lost, off-curve points accepted, flaky Ed25519 key generation, a crashing Ed25519 verify) are in DESIGN.md §8.
 
 ## Property → test
 
-One row per property `docs/TASK.md` requires: each line under Required properties, each case of Security expectations, and each hard property of the Evaluation table (marked **Hard**). Each row names the one or two tests that decide it and the engines they run in; DESIGN.md cites the other tests of each guarantee where it states it. A property no test decides says "not protected". The passkey paths that Firefox and Safari can show only with real passkeys were checked by hand with [docs/manual-checks.md](docs/manual-checks.md); their cells say "by hand" and name the runs of its Run log.
+One row per property `docs/TASK.md` requires (Required properties, Security expectations, and the Evaluation table's hard properties, marked **Hard**), with the one or two tests that decide it and their engines. A property no test decides says "not protected"; "by hand" cells name runs of the [docs/manual-checks.md](docs/manual-checks.md) Run log.
 
-Test references: `<name> ›` cites `test/unit/<name>.test.ts`, `e2e ›` cites `test/e2e/`; a middle segment names the `describe` group. `npm run check:refs` checks that every cited test exists. Unit tests run in Chromium, Firefox and WebKit, except the `passkey ›` and `protection ›` tests that need a virtual authenticator, which run in Chromium only. A test about sealed keys runs once per sealed key type (ed25519, secp256k1). "Stand-in" is Playwright's JavaScript `navigator.credentials` in Firefox and WebKit (see Browser support): it can't decline a prompt, drop user verification or return a PRF result. Each cited test was break-checked: the code it guards was broken once and the test went red in every engine its row lists; the type-level rows went red in `npm run typecheck`. Exception: breaking the fresh random bytes of a passkey's user handle turns the several-passkey-keys e2e test red only in Chromium, as the stand-in never overwrites a passkey. Not break-checked: the platform row "runs in Chromium, Firefox and WebKit", `vault › keys › keys survive closing and reopening the vault`, and the "after commit" cut of the closed-tab row, which are functional checks. Only `unavailable` is retryable: every error test asserts the `retryable` flag through `test/unit/helpers.ts` `expectVaultError`.
+Test references: `<name> ›` cites `test/unit/<name>.test.ts`, `e2e ›` cites `test/e2e/`; a middle segment names the `describe` group. Unit tests run in Chromium, Firefox and WebKit, except `passkey ›` and `protection ›` tests that need a virtual authenticator: Chromium only. Each cited test was break-checked: the code it guards was broken once and the test went red in every engine its row lists. Exceptions: the user-handle break turns the several-passkey-keys e2e test red only in Chromium (the stand-in never overwrites a passkey); not break-checked, as functional checks: the "runs in" platform row, `vault › keys › keys survive closing and reopening the vault`, and the closed-tab row's "after commit" cut. Every error test asserts the `retryable` flag (`test/unit/helpers.ts` `expectVaultError`).
 
 ### Keys
 
