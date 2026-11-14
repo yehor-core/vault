@@ -6,6 +6,7 @@ import { addVirtualAuthenticator, hasVirtualAuthenticator, type VirtualAuthentic
 import {
   cleanup,
   expectVaultError,
+  noPublicKeyAtCreation,
   openContexts,
   openVault,
   readAll,
@@ -279,9 +280,7 @@ describe.runIf(hasVirtualAuthenticator)('passkey keys', () => {
       const { scope, name } = await openVault();
       await scope.generate('ed25519');
       const before = await readAll(name);
-      // As Safari 27.2 answers a security key's creation with extensions (#110): no public key, algorithm 0.
-      vi.spyOn(AuthenticatorAttestationResponse.prototype, 'getPublicKey').mockReturnValue(null);
-      vi.spyOn(AuthenticatorAttestationResponse.prototype, 'getPublicKeyAlgorithm').mockReturnValue(0);
+      noPublicKeyAtCreation();
 
       await expectVaultError(scope.generate('passkey'), 'unavailable');
 

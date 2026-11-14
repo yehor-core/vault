@@ -181,7 +181,7 @@ export async function prompt(pending: Promise<Credential | null>): Promise<Crede
 }
 
 /** A new passkey's public information: a `passkey` key verifies its signatures with the ES256 public key. */
-export function readCreated(credential: Credential | null): { credentialId: Bytes; publicKey: Bytes } {
+function readCreated(credential: Credential | null): { credentialId: Bytes; publicKey: Bytes } {
   const { credentialId, response } = created(credential);
   const spki = response.getPublicKey();
   const publicKey = spki === null ? undefined : new Uint8Array(spki);

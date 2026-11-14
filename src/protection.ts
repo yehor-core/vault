@@ -93,7 +93,7 @@ export async function createUnlockPasskey(): Promise<UnlockSecret> {
   };
   const pending = navigator.credentials.create({ publicKey }); // the prompt, before any await
   const credential = await prompt(pending);
-  const credentialId = readCreatedId(credential);
+  const credentialId = readCreatedId(credential); // D-95: its public key is never used, so none is required
   const prf = credential instanceof PublicKeyCredential ? credential.getClientExtensionResults().prf : undefined;
   let result = prf?.results?.first;
   if (result === undefined && prf?.enabled === true) {

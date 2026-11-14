@@ -13,6 +13,7 @@ import {
   expectVaultError,
   holdGenerate,
   keyTypeCases,
+  noPublicKeyAtCreation,
   openVault,
   readAll,
   readHeader,
@@ -263,7 +264,7 @@ describe.runIf(hasVirtualAuthenticator)('protect, with the PRF result at creatio
     expect(get).toHaveBeenCalledTimes(1);
   });
 
-  test('where the browser returns no public key for the new unlock passkey (Safari 27.2 with a security key), protect succeeds with one prompt and every key signs', async () => {
+  test('where the browser returns no public key for the new unlock passkey (Safari 27.2 with a security key), protect succeeds with one prompt and a sealed key signs (D-95)', async () => {
     const { vault, scope } = await openVault();
     const key = asSealed(await scope.generate('ed25519')); // any sealed type: it shows the protected key opens
     noPublicKeyAtCreation();
@@ -278,15 +279,6 @@ describe.runIf(hasVirtualAuthenticator)('protect, with the PRF result at creatio
     await expect(scope.sign(key, message)).resolves.toMatchObject({ type: 'ed25519' });
   });
 });
-
-/**
- * From here on, every created passkey's response carries no public key and algorithm 0, as Safari 27.2 answers a
- * creation with extensions on a security key (#110). An injected failure: the credential itself is the authenticator's.
- */
-function noPublicKeyAtCreation() {
-  vi.spyOn(AuthenticatorAttestationResponse.prototype, 'getPublicKey').mockReturnValue(null);
-  vi.spyOn(AuthenticatorAttestationResponse.prototype, 'getPublicKeyAlgorithm').mockReturnValue(0);
-}
 
 /** Gives the next `create` prompt a short timeout: with presence off, it then ends as a declined prompt does. */
 function shortCreateTimeout() {
@@ -400,7 +392,7 @@ describe.runIf(hasVirtualAuthenticator)('protect, with no PRF result at creation
     expect(await startedBeforeAnyTask.promise).toBe(true);
   });
 
-  test('where the browser returns no public key for the new unlock passkey (Safari 27.2 with a security key), protect succeeds after the second prompt and every key signs', async () => {
+  test('where the browser returns no public key for the new unlock passkey (Safari 27.2 with a security key), protect succeeds after the second prompt and a sealed key signs (D-95)', async () => {
     const { vault, scope } = await openVault();
     const key = asSealed(await scope.generate('ed25519')); // any sealed type: it shows the protected key opens
     noPublicKeyAtCreation();
