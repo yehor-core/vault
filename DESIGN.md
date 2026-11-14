@@ -520,6 +520,8 @@ Where `protect()` takes a second prompt: the browser returns the PRF result at c
 | Chrome, Firefox on Android | The provider behind Credential Manager | unconfirmed | one or two, unconfirmed |
 | Any | No PRF (`enabled` false or absent); Windows Hello reportedly, unconfirmed | no | one, then `unsupported` |
 
+Safari 27.2 on macOS with a security key (YubiKey firmware 5.4.3, checked by hand) returns no public key from a creation that carries an extension: `getPublicKey()` is `null` and `getPublicKeyAlgorithm()` is `0`, though the authenticator data holds a valid ES256 key. `protect()` reads only the unlock passkey's credential id, as Vault never verifies a signature of it, so the creation goes on to the PRF result or the second prompt: `protection › protect, with the PRF result at creation › where the browser returns no public key for the new unlock passkey…`, `protection › protect, with no PRF result at creation › where the browser returns no public key for the new unlock passkey…` (a stand-in drops the public key). A passkey key is created with no extension and needs its public key, so its `generate` without one stays `unavailable`: `passkey › passkey keys › generate › a generate whose new passkey comes with no ES256 public key is unavailable, and writes nothing`. Rejected: reading the public key from the authenticator data (a parser for a value Vault throws away); recording the pair as unsupported (Vault, not the browser, made it fail). Whether this pair then protects and unlocks: not tested yet: #101.
+
 What Vault detects up front, and what only on failure:
 
 | Check | When | Result |

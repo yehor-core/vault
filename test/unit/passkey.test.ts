@@ -274,6 +274,20 @@ describe.runIf(hasVirtualAuthenticator)('passkey keys', () => {
       await expect(scope.generate('ed25519')).resolves.toMatchObject({ type: 'ed25519' });
     });
 
+    // D-95: unlike the unlock passkey, a passkey key's signatures are verified with its public key, so it needs one.
+    test('a generate whose new passkey comes with no ES256 public key is unavailable, and writes nothing', async () => {
+      const { scope, name } = await openVault();
+      await scope.generate('ed25519');
+      const before = await readAll(name);
+      // As Safari 27.2 answers a security key's creation with extensions (#110): no public key, algorithm 0.
+      vi.spyOn(AuthenticatorAttestationResponse.prototype, 'getPublicKey').mockReturnValue(null);
+      vi.spyOn(AuthenticatorAttestationResponse.prototype, 'getPublicKeyAlgorithm').mockReturnValue(0);
+
+      await expectVaultError(scope.generate('passkey'), 'unavailable');
+
+      expect(await readAll(name)).toEqual(before);
+    });
+
     // D-61: the record has no sealed part, so it goes into the vault as it is, and the prompt is never repeated.
     test('a generate whose prompt is answered while another context wipes lands in the wiped vault, with one prompt', async () => {
       const [a, b] = await openContexts();

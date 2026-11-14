@@ -262,7 +262,31 @@ describe.runIf(hasVirtualAuthenticator)('protect, with the PRF result at creatio
     await second.vault.unlock(); // protect's read of the protected header named the unlock passkey (D-94)
     expect(get).toHaveBeenCalledTimes(1);
   });
+
+  test('where the browser returns no public key for the new unlock passkey (Safari 27.2 with a security key), protect succeeds with one prompt and every key signs', async () => {
+    const { vault, scope } = await openVault();
+    const key = asSealed(await scope.generate('ed25519')); // any sealed type: it shows the protected key opens
+    noPublicKeyAtCreation();
+    const create = vi.spyOn(navigator.credentials, 'create');
+    const get = vi.spyOn(navigator.credentials, 'get');
+
+    await vault.protect();
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(get).not.toHaveBeenCalled();
+    expect(await vault.state()).toBe('unlocked');
+    await expect(scope.sign(key, message)).resolves.toMatchObject({ type: 'ed25519' });
+  });
 });
+
+/**
+ * From here on, every created passkey's response carries no public key and algorithm 0, as Safari 27.2 answers a
+ * creation with extensions on a security key (#110). An injected failure: the credential itself is the authenticator's.
+ */
+function noPublicKeyAtCreation() {
+  vi.spyOn(AuthenticatorAttestationResponse.prototype, 'getPublicKey').mockReturnValue(null);
+  vi.spyOn(AuthenticatorAttestationResponse.prototype, 'getPublicKeyAlgorithm').mockReturnValue(0);
+}
 
 /** Gives the next `create` prompt a short timeout: with presence off, it then ends as a declined prompt does. */
 function shortCreateTimeout() {
@@ -374,6 +398,21 @@ describe.runIf(hasVirtualAuthenticator)('protect, with no PRF result at creation
     await vault.protect();
 
     expect(await startedBeforeAnyTask.promise).toBe(true);
+  });
+
+  test('where the browser returns no public key for the new unlock passkey (Safari 27.2 with a security key), protect succeeds after the second prompt and every key signs', async () => {
+    const { vault, scope } = await openVault();
+    const key = asSealed(await scope.generate('ed25519')); // any sealed type: it shows the protected key opens
+    noPublicKeyAtCreation();
+    const create = vi.spyOn(navigator.credentials, 'create');
+    const get = vi.spyOn(navigator.credentials, 'get');
+
+    await vault.protect();
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(await vault.state()).toBe('unlocked');
+    await expect(scope.sign(key, message)).resolves.toMatchObject({ type: 'ed25519' });
   });
 
   test('a vault protected after two prompts unlocks in another instance with one prompt', async () => {
