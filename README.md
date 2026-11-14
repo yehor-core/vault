@@ -41,14 +41,14 @@ npx playwright install --with-deps chromium firefox webkit   # --with-deps insta
 | `npm run lint` | oxlint (`.oxlintrc.json`) |
 | `npm run format:check` | Prettier over the whole repo |
 | `npm run check:casts` | Every type assertion in `src/` and `demo/` has a comment naming the check that makes it safe |
-| `npm run check:refs` | Every test and code name cited in `DESIGN.md` and `README.md` exists |
+| `npm run check:refs` | Every test and code name cited in `DESIGN.md` and `README.md` exists, and every "not tested" mark names its ticket (`#NN`) or says "not protected" |
 | `npm run check:decisions` | No past decision in `docs/DECISIONS.md` was rewritten |
 | `npm run test:unit` | Vitest Browser Mode in real Chromium, Firefox and WebKit (`test/unit`) |
 | `npm run test:e2e` | Playwright against the demo in Chromium, Firefox and WebKit (`test/e2e`): the dev server, and the production build for a smoke test |
 | `npm run test:scripts` | Node tests of the repo's scripts (`scripts/*.test.ts`) |
 | `npm test` | Script tests, then both suites |
 | `npx vitest run <file> -t '<name>' --project chromium` | One unit test in one engine |
-| `npm run break-check -- <file> <text> <replacement> <test file> '<name>' [engine]` | Breaks the code once, runs the test, restores the code; exit 0 only if the test went red in every engine. `--typecheck` for type-level tests, `--batch <breaks.json>` for several |
+| `npm run break-check -- <file> <text> <replacement> <test file> '<name>' [engine]` | Breaks the code once, runs the test, restores the code; exit 0 only if the test went red in every engine it ran in (all three, or the one named). `--typecheck` for type-level tests, `--batch <breaks.json>` for several |
 | `npm run console-snippets -- <report.md> [engine]` | Runs a report's ```` ```js ```` blocks in the dev demo and prints their console output |
 
 ```ts
@@ -93,11 +93,12 @@ Where the passkey and protection paths are tested:
 | A declined prompt is `cancelled`; no user verification is `unsupported` | unit + e2e | by hand (`cancelled` only) | by hand in Safari (`cancelled` only) |
 | `Vault.protectionSupport()`; `protect()` without a PRF result fails with `unsupported`, the vault unchanged | unit + e2e | unit + e2e (stand-in) | unit + e2e (stand-in) |
 | `protect()` with one or two prompts, `unlock()`, `lock()`, no downgrade | unit | by hand | by hand in Safari |
-| Tampered protected headers; `protect()` across tabs and through a closed or crashed page | unit + e2e | not protected | not protected |
+| Tampered protected headers | unit | not protected | not protected |
+| `protect()` across tabs and through a closed or crashed page | unit + e2e | not protected | not protected |
 
 Chromium drives its own WebAuthn through a CDP virtual authenticator, the only one that returns PRF results. In Firefox and WebKit the e2e tests use Playwright's JavaScript stand-in for `navigator.credentials` ("stand-in"): it always answers ES256 with user verification, so it can't decline, drop user verification or return a PRF result, and checks no user activation. Playwright's WebKit on Linux has no WebAuthn at all, so the tests define empty WebAuthn classes for the stand-in (`test/e2e/passkeys.ts`), and `protectionSupport()` there is `unsupported`.
 
-Needs WebCrypto Ed25519, ECDH P-256, HKDF and AES-GCM, IndexedDB and `Uint8Array.prototype.toBase64`, in a secure context. secp256k1 and verification run on `@noble/curves` 2.3.0 and `@noble/hashes` 2.3.0, pinned exactly. WebKit's quirks that shape the design (stored X25519 keys lost, off-curve points accepted, flaky Ed25519 key generation, a crashing Ed25519 verify) are in DESIGN.md §8.
+Needs WebCrypto Ed25519, ECDH P-256, HKDF and AES-GCM, IndexedDB and `Uint8Array.prototype.toBase64`, in a secure context. secp256k1, ed25519 verification and passkey assertion checks run on `@noble/curves` 2.3.0, and the SHA-256 before a passkey prompt on `@noble/hashes` 2.3.0, both pinned exactly. WebKit's quirks that shape the design (stored X25519 keys lost, off-curve points accepted, flaky Ed25519 key generation, a crashing Ed25519 verify) are in DESIGN.md §8.
 
 ## Property → test
 
