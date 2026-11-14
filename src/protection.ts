@@ -1,7 +1,15 @@
 import { sha256 } from '@noble/hashes/sha2.js';
 import { encode, equalBytes, type Bytes } from './bytes.ts';
 import { VaultError } from './errors.ts';
-import { creationOptions, isUserVerified, noUserVerification, prompt, readCreatedId } from './key-types/passkey.ts';
+import {
+  creationOptions,
+  isUserVerified,
+  noUserVerification,
+  prompt,
+  readCreatedId,
+  secondPrompt,
+  type StartPrompt,
+} from './key-types/passkey.ts';
 import { assertOnlyFields, corrupted, readBytes, type Fields } from './readers.ts';
 import { IV_LENGTH, P256 } from './seal.ts';
 import type { ProtectionSupport } from './vault.ts';
@@ -84,7 +92,7 @@ export async function presentUnlockPasskey(credentialId: Bytes): Promise<Present
 
 /**
  * Creates the unlock passkey, with its prompt started before any await, and returns its PRF result (D-74). The second
- * prompt follows the creation with no other await, so it runs in the same user activation.
+ * prompt follows the creation with no other await while the page has focus; without it, once focus is back (D-96).
  */
 export async function createUnlockPasskey(): Promise<UnlockSecret> {
   const publicKey = {
@@ -97,7 +105,7 @@ export async function createUnlockPasskey(): Promise<UnlockSecret> {
   const prf = credential instanceof PublicKeyCredential ? credential.getClientExtensionResults().prf : undefined;
   let result = prf?.results?.first;
   if (result === undefined && prf?.enabled === true) {
-    const second = await assertUnlock(credentialId);
+    const second = await assertUnlock(credentialId, secondPrompt);
     if (!equalBytes(second.credentialId, credentialId))
       throw new VaultError('unavailable', 'The second prompt was answered by another passkey');
     result = second.result;
@@ -108,18 +116,21 @@ export async function createUnlockPasskey(): Promise<UnlockSecret> {
 }
 
 /**
- * A prompt for the unlock passkey `credentialId`, started before any await. User verification is required and
- * checked: without it, an `hmac-secret` authenticator returns another PRF result.
+ * A prompt for the unlock passkey `credentialId`, started by `ask`: at once by default, before any await; once the
+ * page has focus with `secondPrompt` (D-96). User verification is required and checked: without it, an `hmac-secret`
+ * authenticator returns another PRF result.
  */
-async function assertUnlock(credentialId: Bytes): Promise<{ credentialId: Bytes; result: BufferSource | undefined }> {
+async function assertUnlock(
+  credentialId: Bytes,
+  ask: (start: StartPrompt) => Promise<Credential | null> = (start) => prompt(start()),
+): Promise<{ credentialId: Bytes; result: BufferSource | undefined }> {
   const publicKey: PublicKeyCredentialRequestOptions = {
     challenge: crypto.getRandomValues(new Uint8Array(UNLOCK_CHALLENGE_LENGTH)),
     allowCredentials: [{ type: 'public-key', id: credentialId }],
     userVerification: 'required',
     extensions: { prf: { eval: { first: PRF_INPUT } } },
   };
-  const pending = navigator.credentials.get({ publicKey }); // the prompt, before any await
-  const credential = await prompt(pending);
+  const credential = await ask(() => navigator.credentials.get({ publicKey }));
   if (!(credential instanceof PublicKeyCredential) || !(credential.response instanceof AuthenticatorAssertionResponse))
     throw new VaultError('unavailable', 'The browser returned no passkey assertion');
   if (!isUserVerified(new Uint8Array(credential.response.authenticatorData)))

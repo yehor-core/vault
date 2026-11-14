@@ -11,6 +11,7 @@ import {
   asSealed,
   cleanup,
   expectVaultError,
+  focusLostAtPrompt,
   holdGenerate,
   keyTypeCases,
   noPublicKeyAtCreation,
@@ -405,6 +406,49 @@ describe.runIf(hasVirtualAuthenticator)('protect, with no PRF result at creation
     expect(get).toHaveBeenCalledTimes(1);
     expect(await vault.state()).toBe('unlocked');
     await expect(scope.sign(key, message)).resolves.toMatchObject({ type: 'ed25519' });
+  });
+
+  // D-96: Safari 27.2 with a security key gives the page its focus back only after the creation's prompt has closed.
+  test('where the page gets its focus back only after the creation, protect waits for it and succeeds with the second prompt, with no new gesture', async () => {
+    const { vault, scope } = await openVault();
+    const key = asSealed(await scope.generate('ed25519')); // any sealed type: it shows the protected key opens
+    const { create, get } = focusLostAtPrompt(200);
+
+    await vault.protect();
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(await vault.state()).toBe('unlocked');
+    await expect(scope.sign(key, message)).resolves.toMatchObject({ type: 'ed25519' });
+  });
+
+  test('where the page gets no focus back within 2 seconds after the creation, protect fails with unavailable, retryable, without a second prompt, and the vault is unchanged', async () => {
+    const { vault, scope, name } = await openVault();
+    await scope.generate('ed25519');
+    const before = await readAll(name);
+    const { get } = focusLostAtPrompt();
+
+    const error = await expectVaultError(vault.protect(), 'unavailable');
+
+    expect(error.message).toMatch(/no focus/);
+    expect(get).not.toHaveBeenCalled();
+    expect(await readAll(name)).toEqual(before);
+    expect(await vault.state()).toBe('unprotected');
+  });
+
+  test('a second prompt the browser refuses while the page has no focus makes protect fail with unavailable, not cancelled, and the vault is unchanged', async () => {
+    const { vault, scope, name } = await openVault();
+    await scope.generate('ed25519');
+    const before = await readAll(name);
+    const { get } = focusLostAtPrompt();
+    // The focus event fires while protect waits after the creation, yet the page is still without focus.
+    setTimeout(() => window.dispatchEvent(new FocusEvent('focus')), 300);
+
+    const error = await expectVaultError(vault.protect(), 'unavailable');
+
+    expect(error.cause).toMatchObject({ name: 'NotAllowedError' });
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(await readAll(name)).toEqual(before);
   });
 
   test('a vault protected after two prompts unlocks in another instance with one prompt', async () => {

@@ -286,3 +286,33 @@ export function noPublicKeyAtCreation(): void {
   vi.spyOn(AuthenticatorAttestationResponse.prototype, 'getPublicKey').mockReturnValue(null);
   vi.spyOn(AuthenticatorAttestationResponse.prototype, 'getPublicKeyAlgorithm').mockReturnValue(0);
 }
+
+/**
+ * An injected failure, as Safari 27.2 with a security key behaves (#111): the page loses focus at every answered
+ * prompt, a `get()` without it rejects, and focus returns `regainAfter` ms later (Safari: about 575), else at `regain()`.
+ */
+export function focusLostAtPrompt(regainAfter?: number) {
+  let focused = true;
+  const hasFocus = vi.spyOn(Document.prototype, 'hasFocus').mockImplementation(() => focused);
+  const regain = () => {
+    // A regain timer left by this test must not give the next test a focus event.
+    if (Document.prototype.hasFocus !== hasFocus) return;
+    focused = true;
+    window.dispatchEvent(new FocusEvent('focus'));
+  };
+  const answered = <T>(answer: T): T => {
+    focused = false;
+    if (regainAfter !== undefined) setTimeout(regain, regainAfter);
+    return answer;
+  };
+  const originalCreate = CredentialsContainer.prototype.create;
+  const originalGet = CredentialsContainer.prototype.get;
+  const create = vi
+    .spyOn(navigator.credentials, 'create')
+    .mockImplementation(async (options) => answered(await originalCreate.call(navigator.credentials, options)));
+  const get = vi.spyOn(navigator.credentials, 'get').mockImplementation(async (options) => {
+    if (!focused) throw new DOMException('The document is not focused.', 'NotAllowedError');
+    return answered(await originalGet.call(navigator.credentials, options));
+  });
+  return { create, get, regain };
+}
