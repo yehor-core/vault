@@ -91,13 +91,13 @@ A step that does not match its expected result is logged as it went, with:
 - Whether the vault changed: the key table and State compared with before the step.
 - State afterwards.
 
-A failure caused by the browser or the authenticator is not fixed: the README matrix and DESIGN.md's known limitations state what fails and with which error. It is Vault's fault, and a bug ticket with a test, when the error is misclassified, the vault changed, or a protected vault became unprotected, or when `protect()` succeeds where `unlock()` can't follow.
+A failure caused by the browser or the authenticator is not fixed: the README matrix and DESIGN.md's known limitations state what fails and with which error. It is Vault's fault, and a bug ticket with a test, when the error is misclassified, the vault changed, or a protected vault became unprotected.
 
 Known risk: Safari 26.4 returned a still-encrypted PRF output from security keys (WebKit bug 311099). It does not show in Safari 27.2: with the YubiKey, `protect()` and then `unlock()`, prompts of separate sessions, derive the same key (Run 6b).
 
 ## Run log
 
-Steps marked "as expected" matched the expected result and prompt count of the tables above. ¹ = confirmed by the tester after the run, from memory, not noted during it.
+Steps marked "as expected" matched the expected result and prompt count of the tables above. ¹ = confirmed by the tester after the run, from memory, not noted during it. ² = the prompt count was not reported; the cell shows the expected count, and the step's result was reported as given.
 
 ### Run 1: Safari 18.6 × iPhone (hybrid)
 
@@ -113,14 +113,14 @@ The first attempt saved the passkey in Bitwarden, the phone's default provider; 
 | 4 | 1 | `verified   true`; `key` and `public key` lines those of step 2 | yes |
 | 5 | 0 | `verified   true` | yes |
 | 6 | 1 | `unlocked`, `Ready`, both keys; ed25519 Sign: no prompt, `verified   true`. The PRF result came at creation | yes |
-| 7 | 0 | `locked`, both keys | yes |
+| 7 | 0² | `locked`, both keys | yes |
 | 8 | 1 | `unlocked`; ed25519 Sign: no prompt, `verified   true` | yes |
 | 9 | 0 | `locked` | yes |
-| 10 | 0 | `VaultError locked: The vault is locked`; Last signature unchanged; `locked` | yes |
-| 11 | 1 | Cancelled in the Mac's dialog, before the QR code: `VaultError cancelled: The passkey prompt ended with NotAllowedError`; `locked`, both keys | yes |
+| 10 | 0² | `VaultError locked: The vault is locked`; Last signature unchanged; `locked` | yes |
+| 11 | 1² | Cancelled in the Mac's dialog, before the QR code: `VaultError cancelled: The passkey prompt ended with NotAllowedError`; `locked`, both keys | yes |
 | 12 | 0 | `empty` in both profiles¹ | yes |
 
-Each ed25519 Sign of the same key and message gave another signature, and each verified: Safari's WebCrypto Ed25519 signs non-deterministically (DESIGN.md §8).
+The three ed25519 Signs of steps 5, 6 and 8, one key over the same message, gave three different signatures, and each verified: Safari's WebCrypto Ed25519 signs non-deterministically (DESIGN.md §8).
 
 ### Run 2: Safari 18.6 × YubiKey
 
@@ -145,14 +145,14 @@ Each ed25519 Sign of the same key and message gave another signature, and each v
 | Step | Prompts | Observed | Match |
 |---|---|---|---|
 | 1 | 1 | `passkey`, `unprotected`, `Ready`; the macOS passkey dialog, with the iPhone option | yes |
-| 2 | 1 | `verified   true`; flags `1d`, sign count 0 | yes |
+| 2 | 1² | `verified   true`; flags `1d`, sign count 0 | yes |
 | 3 | 2¹ | `about:profiles` blocked by policy ("Your organization has blocked access to this page"); in a private window: State `empty`, then credential id `441d89ef1c1c6664…`, the one of step 1 | yes |
 | 4 | 1¹ | `verified   true`; `key` and `public key` those of step 2 | yes |
-| 5 | 0 | ed25519 key generated; it signs after step 6 (not reported on its own) | yes |
-| 6 | 1 | Firefox opened its own "Touch your security key…" dialog, with no iPhone or QR code; cancelled: `VaultError cancelled: The passkey prompt ended with NotAllowedError`; `unprotected`, both keys; the ed25519 key still signs | no: Firefox's routing, the vault unchanged |
+| 5 | 0² | Not reported on its own; the ed25519 key is there and signs after step 6 | yes |
+| 6 | 1² | Firefox opened its own "Touch your security key…" dialog, with no iPhone or QR code; cancelled: `VaultError cancelled: The passkey prompt ended with NotAllowedError`; `unprotected`, both keys; the ed25519 key still signs | no: Firefox's routing, the vault unchanged |
 | 7–10 | — | skipped | — |
-| 11 | 1 | Passkey row's Sign, cancelled in the macOS dialog: `VaultError cancelled: The passkey prompt ended with NotAllowedError` | yes |
-| 12 | 0 | as expected¹ | yes |
+| 11 | 1² | Passkey row's Sign, cancelled in the macOS dialog: `VaultError cancelled: The passkey prompt ended with NotAllowedError` | yes |
+| 12 | 0 | as expected; the passkey deleted from the iPhone¹ | yes |
 
 Vault's creation options for the unlock passkey are those of a passkey key plus the PRF extension, with no `authenticatorAttachment`, so the choice of dialog is Firefox's.
 
@@ -164,53 +164,53 @@ Vault's creation options for the unlock passkey are those of a passkey key plus 
 |---|---|---|---|
 | 1 | 1 | as expected | yes |
 | 2 | 1 | `verified   true`; flags `05`, sign count 5 | yes |
-| 3 | 2 | Private window; credential id `aa3a31af0f1acc46…` in both windows | yes |
+| 3 | 2 | Private window; `aa3a31af0f1acc46…` in both windows, as pasted by the tester; it is also the public key's x prefix, as the YubiKey's credential ids are (Run 4b) | yes |
 | 4 | 1 | `verified   true`; `key` and `public key` those of step 2 | yes |
 | 5 | 0 | as expected | yes |
 | 6 | 2 | `unlocked`, `Ready` | yes |
 | 7 | 0 | as expected | yes |
-| 8 | 1 | `VaultError unsupported: The authenticator returned no PRF result`; `locked`, both keys | no: a fault of Vault, #108 |
+| 8 | 1² | `VaultError unsupported: The authenticator returned no PRF result`; `locked`, both keys | no: a fault of Vault, #108 |
 | 9 | — | not applicable: the vault stayed `locked` | — |
-| 10 | 0 | `VaultError locked: The vault is locked` | yes |
-| 11 | 1 | Unlock, cancelled: `VaultError cancelled: The passkey prompt ended with NotAllowedError` | yes |
+| 10 | 0² | `VaultError locked: The vault is locked` | yes |
+| 11 | 1² | Unlock, cancelled: `VaultError cancelled: The passkey prompt ended with NotAllowedError` | yes |
 | 12 | 0 | as expected | yes |
 
 Step 8, checked in the console with two page clicks, the same PRF input and the `Vault unlock` credential: a discoverable `get()` returned no PRF result, a `get()` restricted to the credential returned one. `protect()`'s second prompt was restricted, `unlock()`'s was discoverable, so `protect()` succeeded into a vault `unlock()` could not open. The fix (D-94) restricts `unlock()` to the stored credential id; Run 4b.
 
 ### Run 4b: Firefox × YubiKey, after #108
 
-2026-11-14 · macOS 15.8.3 · Firefox 160.0 · YubiKey firmware 5.4.3 · Vault `77d9845`
+Date not noted (after the Pages build of 2026-11-13 23:07 UTC) · macOS 15.8.3 · Firefox 160.0 · YubiKey firmware 5.4.3 · Vault `77d9845`
 
 | Step | Prompts | Observed | Match |
 |---|---|---|---|
-| 1 | 1 | as expected | yes |
-| 2 | 1 | `verified   true`; flags `05`, sign count 6 | yes |
-| 3 | 2 | Private window; credential id `b9cb0832126e2e51…` in both windows | yes |
-| 4 | 1 | `verified   true`; `key` and `public key` those of step 2 | yes |
+| 1 | 1² | Not reported on its own; the passkey key signs in step 2 | yes |
+| 2 | 1² | `verified   true`; flags `05`, sign count 6 | yes |
+| 3 | 2² | Private window; credential id `b9cb0832126e2e51…` in both windows | yes |
+| 4 | 1² | `verified   true`; `key` and `public key` those of step 2 | yes |
 | 5 | 0 | `verified   true` | yes |
 | 6 | 2 | `unlocked`, `Ready`, both keys; ed25519 Sign: no prompt | yes |
 | 7 | 0 | `locked`, both keys | yes |
 | 8 | 1 | `unlocked`; ed25519 Sign: no prompt, `verified   true` | yes |
 | 9 | 0 | `locked` | yes |
-| 10 | 0 | `VaultError locked: The vault is locked` | yes |
-| 11 | 1 | `VaultError cancelled: The passkey prompt ended with NotAllowedError` | yes |
+| 10 | 0² | `VaultError locked: The vault is locked` | yes |
+| 11 | 1² | `VaultError cancelled: The passkey prompt ended with NotAllowedError` | yes |
 | 12 | 0 | `empty` | yes |
 
 The YubiKey's credential ids begin with the bytes of the public key's x coordinate (seen in the authenticator data of a creation), so the credential id column and the public key line share a prefix.
 
 ### Run 1b: Safari 18.6 × iPhone (hybrid), steps 5–12 after #108
 
-2026-11-14 · macOS 15.8.3 · Safari 18.6 · iPhone 15 Pro, iOS 26.6.2 · Vault `77d9845`. Steps 1–4 are not touched by the fix and were not repeated.
+Date not noted (after Run 4b) · macOS 15.8.3 · Safari 18.6 · iPhone 15 Pro, iOS 26.6.2 · Vault `77d9845`. Steps 1–4 are not touched by the fix and were not repeated.
 
 | Step | Prompts | Observed | Match |
 |---|---|---|---|
-| 5 | 0 | `verified   true` | yes |
+| 5 | 0² | `verified   true` | yes |
 | 6 | 1 | `unlocked`, `Ready`; ed25519 Sign: no prompt | yes |
 | 7 | 0 | `locked` | yes |
 | 8 | 1 | The phone offered `Vault unlock` at once, with no list to pick from; `unlocked`; ed25519 Sign: no prompt, `verified   true` | yes |
 | 9 | 0 | `locked` | yes |
-| 10 | 0 | `VaultError locked: The vault is locked` | yes |
-| 11 | 1 | Cancelled in the Mac's dialog: `VaultError cancelled: The passkey prompt ended with NotAllowedError` | yes |
+| 10 | 0² | `VaultError locked: The vault is locked` | yes |
+| 11 | 1² | Cancelled in the Mac's dialog: `VaultError cancelled: The passkey prompt ended with NotAllowedError` | yes |
 | 12 | 0 | `empty` | yes |
 
 ### Run 5: Safari 27.2 × iPhone (hybrid)
@@ -223,13 +223,13 @@ The YubiKey's credential ids begin with the bytes of the public key's x coordina
 | 2 | 1 | `verified   true`; flags `1d`, sign count 0 | yes |
 | 3 | 2 | New Safari profile; credential id `7ccdba6b9400aeef…` in both; `passkey`, `unprotected` | yes |
 | 4 | 1 | `verified   true`; `key` and `public key` those of step 2 | yes |
-| 5 | 0 | `verified   true` | yes |
+| 5 | 0² | `verified   true` | yes |
 | 6 | 1 | `unlocked`, `Ready`; ed25519 Sign: no prompt | yes |
-| 7 | 0 | `locked`, both keys | yes |
+| 7 | 0² | `locked`, both keys | yes |
 | 8 | 1 | The phone offered `Vault unlock` at once; `unlocked`; ed25519 Sign: no prompt | yes |
 | 9 | 0 | `locked` | yes |
-| 10 | 0 | `VaultError locked: The vault is locked` | yes |
-| 11 | 1 | `VaultError cancelled: The passkey prompt ended with NotAllowedError` | yes |
+| 10 | 0² | `VaultError locked: The vault is locked` | yes |
+| 11 | 1² | `VaultError cancelled: The passkey prompt ended with NotAllowedError` | yes |
 | 12 | 0 | `empty` | yes |
 
 ### Run 6: Safari 27.2 × YubiKey
@@ -243,8 +243,9 @@ The YubiKey's credential ids begin with the bytes of the public key's x coordina
 | 3 | 1 | The first prompt answered as usual (key, PIN, touch, `run 6 key`), no second dialog: `VaultError cancelled: The passkey prompt ended with NotAllowedError`; the fresh profile stayed `empty` | no: a fault of Vault, #111 |
 | 4 | — | skipped: nothing was added | — |
 | 5 | 0 | `verified   true` | yes |
-| 6 | 1 | `VaultError unavailable: The new passkey has no ES256 public key` | no: a fault of Vault, #110 |
-| 7–12 | — | not run; the run was repeated as Run 6b | — |
+| 6 | 1 | `VaultError unavailable: The new passkey has no ES256 public key`; State and keys afterwards not reported | no: a fault of Vault, #110 |
+| 7–10 | — | skipped: the vault was not protected | — |
+| 11–12 | — | not reported; the run was repeated as Run 6b | — |
 
 Step 3, in the console, from page clicks: a discoverable `get()` succeeded; the same-id `get()` chained right after it was refused with `NotAllowedError` "The document is not focused."; from a new click it succeeded. `document.hasFocus()` was false right after the first prompt, the `focus` event came 575 ms later, and a `get()` after it succeeded with no new click. Fix: D-96.
 
@@ -265,6 +266,6 @@ Step 6, in the console: a creation with Vault's options and the PRF extension ha
 | 7 | 0 | as expected | yes |
 | 8 | 1 | `unlocked`; ed25519 Sign: no prompt. WebKit bug 311099 does not show | yes |
 | 9 | 0 | as expected | yes |
-| 10 | 0 | `VaultError locked: The vault is locked` | yes |
-| 11 | 1 | `VaultError cancelled: The passkey prompt ended with NotAllowedError` | yes |
+| 10 | 0² | `VaultError locked: The vault is locked` | yes |
+| 11 | 1² | `VaultError cancelled: The passkey prompt ended with NotAllowedError` | yes |
 | 12 | 0 | as expected | yes |
