@@ -2,8 +2,6 @@
 
 A browser-native private-key store on top of IndexedDB: ed25519, secp256k1 and passkey keys in named scopes, encrypted at rest, in a vault that is unprotected or passkey-protected. Design: [DESIGN.md](DESIGN.md).
 
-> Status: S7 done.
-
 ## Demo
 
 Live at https://yehor-core.github.io/vault/ (`.github/workflows/pages.yml` deploys it on every push to `main`); `npm run demo` serves the same page locally. In one fixed scope, `demo`, it generates keys of each type, adds an existing passkey, lists, signs and verifies each signature outside Vault, deletes, protects, unlocks, locks and wipes, and shows `vault.state()`. Passkeys made on the Pages demo and on localhost are different credentials (relying-party ids `yehor-core.github.io` and `localhost`).

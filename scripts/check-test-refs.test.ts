@@ -32,7 +32,7 @@ export function untilUnchanged() {}
 
 interface Fixture {
   readonly readme?: string;
-  /** docs/ROADMAP.md; absent by default, which skips the status check. */
+  /** docs/ROADMAP.md; absent by default. */
   readonly roadmap?: string;
   /** Messages of commits made on a branch off `base`; with none, the fixture is no git repo. */
   readonly commits?: readonly string[];
@@ -218,29 +218,9 @@ for (const [label, commits] of [
   });
 }
 
-// The README status names the slice ROADMAP.md marks in progress, or, with none, the last one done.
-const roadmap = (s3: string, s4: string) =>
-  `## S3: Storage\nStatus: ${s3} · Spec: #35\n\n## S4: Multi-tab\nStatus: ${s4} · Spec: #51\n`;
-
-for (const [slices, readme] of [
-  [roadmap('done', 'in progress'), '> Status: S4 in progress. Built: …'],
-  [roadmap('done', 'planned'), '> Status: S3 done. Built: …'],
-] as const) {
-  test(`accepts README "${readme}" against its roadmap`, () => {
-    const { ok, output } = checkDesign('', '', { roadmap: slices, readme });
-    assert.ok(ok, output);
-  });
-}
-
-for (const [slices, readme] of [
-  [roadmap('done', 'in progress'), '> Status: S2 in progress. Built: …'],
-  [roadmap('done', 'in progress'), '> Status: S3 done. Built: …'],
-  [roadmap('done', 'planned'), '> Status: S3 in progress. Built: …'],
-  [roadmap('done', 'in progress'), '> Built: …'],
-] as const) {
-  test(`fails README "${readme}" against its roadmap`, () => {
-    const { ok, output } = checkDesign('', '', { roadmap: slices, readme });
-    assert.ok(!ok, output);
-    assert.match(output, /README\.md: says ".*", ROADMAP\.md says "Status: S\d (in progress|done)"/);
-  });
-}
+// The README carries no slice status (D-99): a README without one passes whatever ROADMAP.md says.
+test('accepts a README without a status line, whatever slice ROADMAP.md marks in progress', () => {
+  const roadmap = '## S3: Storage\nStatus: done · Spec: #35\n\n## S4: Multi-tab\nStatus: in progress · Spec: #51\n';
+  const { ok, output } = checkDesign('', '', { roadmap, readme: '# Vault\n\nA browser-native private-key store.\n' });
+  assert.ok(ok, output);
+});

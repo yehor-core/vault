@@ -8,7 +8,6 @@
 // The tickets this branch closes are named nowhere in the docs: once a ticket's tests exist, a "not yet (#NN)" left
 // behind in any wording is stale. They are the `Refs #NN` of the branch's commits since its merge-base with the
 // base ref, and of the commit being made (--message, from the commit-msg hook).
-// The README status names the slice ROADMAP.md marks in progress, or, with none, the last one done.
 //
 //   npm run check:refs -- [base ref, default origin/main] [--message <commit message file>]
 //
@@ -121,23 +120,6 @@ function checkClosed(line: string, where: string, closed: Set<string>): void {
   }
 }
 
-/** README's `Status: S<N> <state>` matches ROADMAP.md: the slice in progress, or, with none, the last one done. */
-function checkStatus(): void {
-  if (!existsSync('docs/ROADMAP.md')) return;
-  const slices = Array.from(
-    readFileSync('docs/ROADMAP.md', 'utf8').matchAll(/^## (S\d+):.*\nStatus: (done|in progress|planned)\b/gm),
-    ([, slice, state]) => ({ slice, state }),
-  );
-  const current =
-    slices.find(({ state }) => state === 'in progress') ?? slices.findLast(({ state }) => state === 'done');
-  if (current === undefined) return;
-  const expected = `Status: ${current.slice} ${current.state}`;
-  const status = /Status: S\d+ (?:in progress|done)/.exec(readFileSync('README.md', 'utf8'));
-  if (status?.[0] !== expected) {
-    failures.push(`README.md: says "${status?.[0] ?? 'no status'}", ROADMAP.md says "${expected}"`);
-  }
-}
-
 /** Whether `source` holds `name` as a whole name: `commitKeyRecord` is not `#commitKeyRecord`. */
 function containsName(source: string, name: string): boolean {
   const escaped = name.replace(/[$]/g, '\\$&');
@@ -177,7 +159,6 @@ function checkMarks(line: string, where: string): void {
 }
 
 const closed = closedTickets(process.argv.slice(2));
-checkStatus();
 for (const doc of DOCS) {
   const lines = readFileSync(doc, 'utf8').split('\n');
   lines.forEach((line, index) => {
@@ -221,6 +202,6 @@ if (failures.length > 0) {
 } else {
   console.log(
     `${checked} test citations and ${checkedCode} code citations resolve; every "not tested" mark names its ticket; ` +
-      `no ticket this branch closes (${closed.size}) is named; the README status matches the roadmap.`,
+      `no ticket this branch closes (${closed.size}) is named.`,
   );
 }
