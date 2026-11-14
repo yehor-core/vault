@@ -1,7 +1,7 @@
 import { sha256 } from '@noble/hashes/sha2.js';
 import { encode, equalBytes, type Bytes } from './bytes.ts';
 import { VaultError } from './errors.ts';
-import { creationOptions, isUserVerified, noUserVerification, prompt, readCreated } from './key-types/passkey.ts';
+import { creationOptions, isUserVerified, noUserVerification, prompt, readCreatedId } from './key-types/passkey.ts';
 import { assertOnlyFields, corrupted, readBytes, type Fields } from './readers.ts';
 import { IV_LENGTH, P256 } from './seal.ts';
 import type { ProtectionSupport } from './vault.ts';
@@ -93,7 +93,7 @@ export async function createUnlockPasskey(): Promise<UnlockSecret> {
   };
   const pending = navigator.credentials.create({ publicKey }); // the prompt, before any await
   const credential = await prompt(pending);
-  const { credentialId } = readCreated(credential);
+  const credentialId = readCreatedId(credential); // D-95: its public key is never used, so none is required
   const prf = credential instanceof PublicKeyCredential ? credential.getClientExtensionResults().prf : undefined;
   let result = prf?.results?.first;
   if (result === undefined && prf?.enabled === true) {

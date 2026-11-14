@@ -180,18 +180,31 @@ export async function prompt(pending: Promise<Credential | null>): Promise<Crede
   }
 }
 
-export function readCreated(credential: Credential | null): { credentialId: Bytes; publicKey: Bytes } {
+/** A new passkey's public information: a `passkey` key verifies its signatures with the ES256 public key. */
+function readCreated(credential: Credential | null): { credentialId: Bytes; publicKey: Bytes } {
+  const { credentialId, response } = created(credential);
+  const spki = response.getPublicKey();
+  const publicKey = spki === null ? undefined : new Uint8Array(spki);
+  if (response.getPublicKeyAlgorithm() !== ES256 || publicKey === undefined || !isPublicKey(publicKey))
+    throw new VaultError('unavailable', 'The new passkey has no ES256 public key');
+  return { credentialId, publicKey };
+}
+
+/**
+ * D-95: a new passkey's credential id alone, its public key not required, for a passkey whose signatures Vault never
+ * verifies. Safari 27.2 returns no public key from a security key's creation with extensions (#110).
+ */
+export function readCreatedId(credential: Credential | null): Bytes {
+  return created(credential).credentialId;
+}
+
+function created(credential: Credential | null): { credentialId: Bytes; response: AuthenticatorAttestationResponse } {
   if (
     !(credential instanceof PublicKeyCredential) ||
     !(credential.response instanceof AuthenticatorAttestationResponse)
   )
     throw new VaultError('unavailable', 'The browser returned no passkey credential');
-  const { response } = credential;
-  const spki = response.getPublicKey();
-  const publicKey = spki === null ? undefined : new Uint8Array(spki);
-  if (response.getPublicKeyAlgorithm() !== ES256 || publicKey === undefined || !isPublicKey(publicKey))
-    throw new VaultError('unavailable', 'The new passkey has no ES256 public key');
-  return { credentialId: new Uint8Array(credential.rawId), publicKey };
+  return { credentialId: new Uint8Array(credential.rawId), response: credential.response };
 }
 
 interface Assertion extends PasskeySignature {

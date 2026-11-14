@@ -6,6 +6,7 @@ import { addVirtualAuthenticator, hasVirtualAuthenticator, type VirtualAuthentic
 import {
   cleanup,
   expectVaultError,
+  noPublicKeyAtCreation,
   openContexts,
   openVault,
   readAll,
@@ -272,6 +273,18 @@ describe.runIf(hasVirtualAuthenticator)('passkey keys', () => {
       expect(await readHeader(name)).toMatchObject({ v: 1 });
       expect(await scope.list()).toEqual([key]);
       await expect(scope.generate('ed25519')).resolves.toMatchObject({ type: 'ed25519' });
+    });
+
+    // D-95: unlike the unlock passkey, a passkey key's signatures are verified with its public key, so it needs one.
+    test('a generate whose new passkey comes with no ES256 public key is unavailable, and writes nothing', async () => {
+      const { scope, name } = await openVault();
+      await scope.generate('ed25519');
+      const before = await readAll(name);
+      noPublicKeyAtCreation();
+
+      await expectVaultError(scope.generate('passkey'), 'unavailable');
+
+      expect(await readAll(name)).toEqual(before);
     });
 
     // D-61: the record has no sealed part, so it goes into the vault as it is, and the prompt is never repeated.

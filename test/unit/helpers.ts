@@ -276,3 +276,13 @@ export function done<T>(req: IDBRequest<T>): Promise<T> {
     if (req instanceof IDBOpenDBRequest) req.onblocked = () => reject(new Error('blocked'));
   });
 }
+
+/**
+ * From here on, every created passkey's response carries no public key and algorithm 0, as Safari 27.2 answers a
+ * creation with extensions on a security key (#110, D-95). An injected failure: the credential itself is the
+ * authenticator's. `vi.restoreAllMocks()` ends it.
+ */
+export function noPublicKeyAtCreation(): void {
+  vi.spyOn(AuthenticatorAttestationResponse.prototype, 'getPublicKey').mockReturnValue(null);
+  vi.spyOn(AuthenticatorAttestationResponse.prototype, 'getPublicKeyAlgorithm').mockReturnValue(0);
+}
