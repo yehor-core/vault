@@ -6,6 +6,7 @@ import { addVirtualAuthenticator, hasVirtualAuthenticator, type VirtualAuthentic
 import {
   cleanup,
   expectVaultError,
+  focusLostAtPrompt,
   noPublicKeyAtCreation,
   openContexts,
   openVault,
@@ -652,6 +653,43 @@ describe.runIf(hasVirtualAuthenticator)('passkey keys', () => {
         .mockImplementationOnce(original)
         .mockRejectedValueOnce(new DOMException('declined', 'NotAllowedError'));
       await expectVaultError(fresh.scope.add('passkey'), 'cancelled');
+      expect(await readHeader(fresh.name)).toBeUndefined();
+    });
+
+    // D-96: Safari 27.2 with a security key gives the page its focus back only after the first prompt has closed.
+    test('where the page gets its focus back only after the first prompt, add waits for it and completes with two prompts, with no new gesture', async () => {
+      const { key, fresh } = await elsewhere();
+      const { get, regain } = focusLostAtPrompt(200);
+
+      const added = await fresh.scope.add('passkey');
+
+      expect(added).toEqual({ ...key, createdAt: expect.any(Date) });
+      expect(get).toHaveBeenCalledTimes(2);
+      regain(); // the user's next click is on a focused page
+      expect(await verifyAssertion(key.publicKey, await fresh.scope.sign(key, message), message)).toBe(true);
+    });
+
+    test('where the page gets no focus back within 2 seconds after the first prompt, add fails with unavailable, retryable, without a second prompt, and writes nothing', async () => {
+      const { fresh } = await elsewhere();
+      const { get } = focusLostAtPrompt();
+
+      const error = await expectVaultError(fresh.scope.add('passkey'), 'unavailable');
+
+      expect(error.message).toMatch(/no focus/);
+      expect(get).toHaveBeenCalledTimes(1);
+      expect(await readHeader(fresh.name)).toBeUndefined();
+    });
+
+    test('a second prompt the browser refuses while the page has no focus makes add fail with unavailable, not cancelled, and writes nothing', async () => {
+      const { fresh } = await elsewhere();
+      const { get } = focusLostAtPrompt();
+      // The focus event fires while add waits after its first prompt, yet the page is still without focus.
+      setTimeout(() => window.dispatchEvent(new FocusEvent('focus')), 300);
+
+      const error = await expectVaultError(fresh.scope.add('passkey'), 'unavailable');
+
+      expect(error.cause).toMatchObject({ name: 'NotAllowedError' });
+      expect(get).toHaveBeenCalledTimes(2);
       expect(await readHeader(fresh.name)).toBeUndefined();
     });
 

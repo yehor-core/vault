@@ -24,6 +24,8 @@ const FLAGS_OFFSET = 32;
 const FLAG_UV = 0x04;
 // Authenticators may return high-S signatures; the signed bytes are hashed with SHA-256 by ES256 itself.
 const VERIFY_OPTIONS = { prehash: true, lowS: false, format: 'der' } as const;
+/** D-96: how long a chained second prompt waits for page focus; Safari 27.2 gave it back 575 ms after a prompt (#111). */
+const FOCUS_WAIT_MS = 2000;
 
 /** The part of a key record a passkey key owns: the id of its credential at the passkey provider. */
 export interface PasskeyPart {
@@ -106,10 +108,11 @@ export const passkey: PasskeyKeyType = {
       async complete() {
         const again = randomChallenge();
         const allowCredentials = [{ type: 'public-key' as const, id: credentialId }];
-        const pendingSecond = navigator.credentials.get({
-          publicKey: { challenge: again, allowCredentials, userVerification: 'required' },
-        });
-        const answered = await prompt(pendingSecond);
+        const answered = await secondPrompt(() =>
+          navigator.credentials.get({
+            publicKey: { challenge: again, allowCredentials, userVerification: 'required' },
+          }),
+        );
         const second = readAssertion(answered);
         failAdd(checkAssertion(second, credentialId, again, PRESENTED));
         const publicKey = sharedPublicKey(signedBy(first), signedBy(second));
@@ -178,6 +181,40 @@ export async function prompt(pending: Promise<Credential | null>): Promise<Crede
       throw new VaultError('unsupported', `The passkey prompt ended with ${name}`, { cause });
     throw new VaultError('unavailable', 'The passkey prompt failed', { cause });
   }
+}
+
+/**
+ * D-96: a prompt chained right after another one (`add`, `protect()`). With page focus, `start` runs at once, before
+ * any await. Without it, as Safari 27.2 leaves a page after a security key's prompt, it runs once the window's `focus`
+ * event fires, at most `FOCUS_WAIT_MS` later; a browser refuses `get()` while the page has no focus. No focus by then,
+ * or a `NotAllowedError` while the page has none, is `unavailable` (retryable): the user cancelled nothing.
+ */
+export async function secondPrompt(start: () => Promise<Credential | null>): Promise<Credential | null> {
+  if (!document.hasFocus() && !(await focusWithin(FOCUS_WAIT_MS))) throw noFocus();
+  try {
+    return await prompt(start());
+  } catch (error) {
+    if (error instanceof VaultError && error.code === 'cancelled' && !document.hasFocus()) throw noFocus(error.cause);
+    throw error;
+  }
+}
+
+function noFocus(cause?: unknown): VaultError {
+  return new VaultError('unavailable', 'The second passkey prompt could not open: the page has no focus', { cause });
+}
+
+/** Resolves true once the window's `focus` event fires, false after `ms`. */
+function focusWithin(ms: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const settle = (focused: boolean) => {
+      clearTimeout(timer);
+      window.removeEventListener('focus', onFocus);
+      resolve(focused);
+    };
+    const onFocus = () => settle(true);
+    const timer = setTimeout(() => settle(false), ms);
+    window.addEventListener('focus', onFocus);
+  });
 }
 
 /** A new passkey's public information: a `passkey` key verifies its signatures with the ES256 public key. */
